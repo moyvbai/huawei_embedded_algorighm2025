@@ -166,14 +166,11 @@ void solve() {
     users.resize(M + 1);
     clog << M << endl;
     for (int i = 1; i <= M; i ++) {
+        // clog << i << endl;
         int si, ei, cnti; cin >> si >> ei >> cnti;
+        // clog << si << ei << cnti << endl;
         users[i] = User(i, si, ei, cnti);
-        
-        // Ìí¼ÓRequestReadyÊÂ¼þ
-        RequestReadyEvent reqReady;
-        reqReady.time = si;
-        reqReady.userId = i;
-        eventQueue.push(reqReady);
+        // clog << i << endl;
     }
 
 
@@ -183,11 +180,39 @@ void solve() {
             cin >> latency[i][j];
         }
     }
+    // clog << "over!" << endl;
 
     int a, b; cin >> a >> b;
-    
+    clog << a << b << endl;
+    int serverId = 1, npuId = 1;
+    for (int i = 1; i <= M; i ++) {
+        vector<vector<int> > ans;
+        int total = users[i].cnt;
+        int startTime = users[i].s;
+        while (total) {
+            int bi = (servers[serverId].m - b) / a;
+            bi = min(total, bi);
+            ans.push_back({startTime, serverId, npuId, bi});
+            startTime += latency[serverId][i] + 1;
+            total -= bi;
+        }
 
+        cout << ans.size() << endl;
+        for (int j = 0; j < ans.size(); j ++) {
+            cout << ans[j][0] << " " << ans[j][1] << " "
+                << ans[j][2] << " " << ans[j][3] << endl;
+        }
 
+        npuId ++;
+        if (npuId > servers[serverId].g) {
+            // cout << npuId << endl;
+            serverId += 1;
+            npuId = 1;
+
+            if (serverId > N) serverId = 1;
+        }
+
+    }
 
 }
  

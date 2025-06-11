@@ -8,7 +8,7 @@
 // 计数从1开始
 int N;  // 服务器数量
 int M; // 用户数量
-int a, b; // 显存与batchsize之间的关系，Mem = a * bs + b
+int A, B; // 显存与batchsize之间的关系，Mem = a * bs + b
 
 class Request {
 public:
@@ -48,7 +48,6 @@ public:
 
 };
 
-
 std::priority_queue<Event> eventQueue;
 
 
@@ -77,8 +76,7 @@ public:
         sort(requests.begin(), requests.end());
         std::vector<Request> new_requests;
         for (int i = 0; i < (int)requests.size(); i ++) {
-            if (requests[i].batchSize * a + b <= this->freeMemory) {
-                // std::cout << "batch size: " << requests[i].batchSize << std::endl; 
+            if (requests[i].batchSize * A + B <= this->freeMemory) {
                 Event reqcomp;
                 reqcomp.time = currentTime + calculateInferenceTime(requests[i].batchSize);
                 reqcomp.prior = 1;
@@ -87,21 +85,21 @@ public:
 
                 // std::cout << "request complete time: " << reqcomp.time << std::endl;
                 eventQueue.push(reqcomp);
-                this->freeMemory -= (requests[i].batchSize * a + b);
+                this->freeMemory -= (requests[i].batchSize * A + B);
             } else {
                 new_requests.push_back(requests[i]);
             }
         }
-        requests = new_requests;
+        requests = std::move(new_requests);
     }
 
     // 构造函数
     NPU(){};
-    NPU(int serverId, int id, int totalMemory, int freeMemory, int inferenceSpeed) {
+    NPU(int serverId, int id, int totalMemory, int inferenceSpeed) {
         this->severId = serverId;
         this->id = id;
         this->totalMemory = totalMemory;
-        this->freeMemory = freeMemory;
+        this->freeMemory = totalMemory;
         this->inferenceSpeed = inferenceSpeed;
     } 
     
@@ -110,21 +108,18 @@ public:
 class Server {
 public:
     int id; // 服务器id
-    int g; // NPU个数
-    int k; // NPU推理速度
-    int m; // NPU显存大小；
+    int npuCount; // NPU个数
+
     std::vector<NPU> npus; // NPU实例
     
     Server(){};
-    Server(int id, int g, int k, int m) {
+    Server(int id, int npuCount, int k, int m) {
         this->id = id;
-        this->g = g;
-        this->k = k;
-        this->m = m;
+        this->npuCount = npuCount;
 
-        npus.resize(g + 1);
-        for (int i = 1; i <= g; i ++) {
-            npus[i] = NPU(id, i, m, m, k);
+        npus.resize(npuCount + 1);
+        for (int i = 1; i <= npuCount; i ++) {
+            npus[i] = NPU(id, i, m, k);
         }
     }
 };
@@ -134,17 +129,17 @@ std::vector<Server> servers;
 class User {
 public:
     int id; // 用户id
-    int s; // 请求开始时间
-    int e; // 请求结束时间
-    int cnt; // 请求数量
-    int remain_cnt; // 剩余的未完成的请求数量
+    int startTime; // 请求开始时间
+    int endTime; // 请求结束时间
+    int requestCount; // 请求数量
+    int remainCount; // 剩余的未完成的请求数量
     User(){};
-    User(int id, int s, int e, int cnt) {
+    User(int id, int startTime, int endTime, int requestCount) {
         this->id = id;
-        this->s = s;
-        this->e = e;
-        this->cnt = cnt;
-        this->remain_cnt = cnt;
+        this->startTime = startTime;
+        this->endTime = endTime;
+        this->requestCount = requestCount;
+        this->remainCount = requestCount;
     }
 };
 std::vector<User> users;
@@ -170,7 +165,7 @@ void solve() {
         
         Event e;
         e.time = si;
-        e.prior = 2;
+        e.prior = 3;
         e.type = READY;
         e.request.userId = i;
         eventQueue.push(e);
@@ -184,8 +179,7 @@ void solve() {
         }
     }
 
-    int a, b; 
-    std::cin >> a >> b;
+    std::cin >> A >> B;
     // std::cout << a << std::endl;
     std::vector<std::vector<std::array<int, 4> > > ans(M + 1); // 最终输出
     std::vector<std::array<int, 2> > userNpu(M + 1, {0, 0}); // 用户指定的npu;
@@ -195,13 +189,13 @@ void solve() {
     int cnt = 0;
     while (!eventQueue.empty()) {
         Event e = eventQueue.top(); // 假设你有一个Event指针
+        eventQueue.pop();
         int currentTime = e.time;
         Request& request = e.request;
-        eventQueue.pop();
+        
         // std::cout << "time: " << currentTime << std::endl;
         // std::cout << e.type << std::endl;
-        cnt += 1;
-        // if (cnt > 10000) break;
+
 
         if (e.type == COMPLETED) {
             // 是RequestCompletedEvent
@@ -209,59 +203,9 @@ void solve() {
             int serverId = request.serverId;
             int npuId = request.npuId;
             int batchSize = request.batchSize;
-            servers[serverId].npus[npuId].freeMemory += a * batchSize + b;
+            servers[serverId].npus[npuId].freeMemory += A * batchSize + B;
             
             needUpdateNPU.insert({serverId, npuId});
-
-        } else if (e.type == READY) {
-            // 是RequestReadyEvent
-            int userId = request.userId;
-            // 假定整个过程中不更换npu, 如果是第一个batch size, 需要计算分配到那个npu上，
-            if (userNpu[userId][0] == 0) {
-                userNpu[userId] = {currentServerId, currentNpuId};
-                
-                // currentNpuId += 1;
-                // if (currentNpuId > servers[currentServerId].g) {
-                //     currentServerId += 1;
-                //     currentNpuId = 1;
-                // }
-
-                // if (currentServerId > N) currentServerId = 1;
-            }
-
-            int serverId = userNpu[userId][0];
-            int npuId = userNpu[userId][1];
-            
-            // std::cout << currentServerId << " " << currentNpuId << std::endl;
-            
-            
-            Event reqArrive, reqReady;
-            reqArrive.time = e.time + latency[serverId][userId];
-            reqArrive.prior = 3;
-            reqArrive.type = ARRIVED;
-            
-
-            reqReady.time = e.time + latency[serverId][userId] + 1;
-            reqReady.prior = 2;
-            reqReady.type = READY;
-
-            Request req;
-            req.requestTime = e.time;
-            req.serverId = serverId;
-            req.npuId = npuId;
-            req.userId = userId;
-            req.batchSize = (servers[serverId].m - b) / a;
-            req.batchSize = std::min(req.batchSize, users[userId].remain_cnt);
-            users[userId].remain_cnt -= req.batchSize;
-            reqArrive.request = req;
-            reqReady.request = req;
-
-
-            if (req.batchSize) eventQueue.push(reqArrive);
-            if (users[userId].remain_cnt) eventQueue.push(reqReady);
-            ans[userId].push_back({e.time, serverId, npuId, req.batchSize});
-            // std::cout << userId << std::endl;
-            // std::cout << "arrived time: " << reqArrive.time << std::endl;
 
         } else if (e.type == ARRIVED) {
             // 是RequestArrivedEvent
@@ -269,52 +213,74 @@ void solve() {
             int serverId = request.serverId;
             int npuId = request.npuId;
             int batchSize = request.batchSize;
-            // std::cout << serverId << " " << npuId << std::endl;
-            // std::cout << servers[serverId].npus.size() << std::endl;
             servers[serverId].npus[npuId].requests.push_back(request);
 
             needUpdateNPU.insert({serverId, npuId});
-            // std::cout << "arrived" << std::endl;
-        }
+        } else if (e.type == READY) {
+            // 是RequestReadyEvent
+            int userId = request.userId;
+            // 假定整个过程中不更换npu, 如果是第一个batch size, 需要计算分配到那个npu上，
+            if (userNpu[userId][0] == 0) {
+                userNpu[userId] = {currentServerId, currentNpuId};
+                
+                currentNpuId += 1;
+                if (currentNpuId > servers[currentServerId].npuCount) {
+                    currentServerId += 1;
+                    currentNpuId = 1;
+                }
+
+                if (currentServerId > N) currentServerId = 1;
+            }
+
+            int serverId = userNpu[userId][0];
+            int npuId = userNpu[userId][1];
+            
+            
+            
+            Event reqArrive, reqReady;
+            reqArrive.time = e.time + latency[serverId][userId];
+            reqArrive.prior = 2;
+            reqArrive.type = ARRIVED;
+            
+
+            reqReady.time = e.time + latency[serverId][userId] + 1;
+            reqReady.prior = 3;
+            reqReady.type = READY;
+
+            Request req;
+            req.requestTime = e.time + latency[serverId][userId];
+            req.serverId = serverId;
+            req.npuId = npuId;
+            req.userId = userId;
+            req.batchSize = (servers[serverId].npus[npuId].totalMemory - B) / A;
+            req.batchSize = std::min(req.batchSize, users[userId].remainCount);
+            users[userId].remainCount -= req.batchSize;
+            reqArrive.request = req;
+            reqReady.request = req;
+
+
+            if (req.batchSize > 0) eventQueue.push(reqArrive);
+            if (users[userId].remainCount > 0) eventQueue.push(reqReady);
+            ans[userId].push_back({e.time, serverId, npuId, req.batchSize});
+
+        } 
 
         if (eventQueue.empty() or currentTime != eventQueue.top().time) {
-            // std::cout << "start handle" << " " << needUpdateNPU.size() << " 个NPU" << std::endl;
             for (auto it = needUpdateNPU.begin(); it != needUpdateNPU.end(); it ++) {
                 int serverId = it->at(0), npuId = it->at(1);
-                servers[serverId].npus[npuId].handleRequest(currentTime);
             }
             needUpdateNPU.clear();
         }
 
     }
 
-
-    int maxTime = 0;
     for (int i = 1; i <= M; i ++) {
         std::cout << ans[i].size() << std::endl;
-        int sz = ans[i].size(), s = 0;
-        if (sz <= 0 or sz > 300) {
-            std::vector<Request> allRequests(1e9);
-        } 
         for (int j = 0; j < (int)ans[i].size(); j ++) {
             std::cout << ans[i][j][0] << " " << ans[i][j][1] << " "
-                << ans[i][j][2] << " " << ans[i][j][3] << "\n";
-            
-            s += ans[i][j][3];
+                << ans[i][j][2] << " " << ans[i][j][3] << std::endl;
         }
-        
-        if (s != users[i].cnt) {
-            std::vector<Request> allRequests(1e9);
-        }
-
     }
-    // std::cout << maxTime << std::endl << std::endl;
-    
-    // std::sort(userNpu.begin(), userNpu.end());
-    // for (int i = 1; i <= M; i ++) {
-    //     // std::cout << userNpu[i][0] << " " << userNpu[i][1] << std::endl;
-    //     if (users[i].remain_cnt) std::cout << users[i].remain_cnt << std::endl;
-    // }
 }
  
 

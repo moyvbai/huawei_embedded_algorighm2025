@@ -251,7 +251,7 @@ class Scorer:
         # 绘图
         # self._plot_npu_timeline_bar(user_progress)
         # self._plot_npu_gantt_charts(user_progress)
-        self._plot_user_gantt_charts(user_progress)
+        # self._plot_user_gantt_charts(user_progress)
     
     def _plot_npu_timeline_bar(self, user_progress):
         """
@@ -566,14 +566,14 @@ class Scorer:
 
 
 if __name__ == '__main__':
-    # if len(sys.argv) != 3:
-    #     print("Usage: python scorer.py <input_file_path> <output_file_path>")
-    #     sys.exit(1)
+    if len(sys.argv) != 3:
+        print("Usage: python scorer.py <input_file_path> <output_file_path>")
+        sys.exit(1)
         
-    # input_file = sys.argv[1]
-    # output_file = sys.argv[2]
-    input_file = "D:\VScodeFile\C++\HUAWEI\data\data.in"
-    output_file = "D:\VScodeFile\C++\HUAWEI\src\out.txt"
+    input_file = sys.argv[1]
+    output_file = sys.argv[2]
+    # input_file = "D:\VScodeFile\C++\HUAWEI\data\data.in"
+    # output_file = "D:\VScodeFile\C++\HUAWEI\src\out.txt"
 
 
     scorer = Scorer(input_path=input_file, output_path=output_file)

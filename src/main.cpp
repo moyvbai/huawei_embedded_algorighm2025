@@ -15,6 +15,30 @@ int M; // 用户数量
 int A, B; // 显存与batchsize之间的关系，Mem = a * bs + b
 
 
+class User {
+public:
+    int id; // 用户id
+    int startTime; // 请求开始时间
+    int endTime; // 请求结束时间
+    int requestCount; // 请求数量
+    int remainCount; // 剩余的未完成的请求数量
+
+    int prior; // 用户的优先级
+    User(){};
+    User(int id, int startTime, int endTime, int requestCount) {
+        this->id = id;
+        this->startTime = startTime;
+        this->endTime = endTime;
+        this->requestCount = requestCount;
+        this->remainCount = requestCount;
+        // this->prior = 1e5 * requestCount / (this->endTime - this->startTime);
+        this->prior = - this->endTime;
+    }
+};
+std::vector<User> users;
+std::vector<std::vector<int> > latency; // 用户将请求发送到服务器上的时延
+std::vector<std::vector<std::array<int, 4> > > ans;
+
 class NPU {
 public:
     int severId; // 所属的服务器id
@@ -46,33 +70,81 @@ public:
         this->inferenceAbility = sqrtl(this->maxBatchSize) * inferenceSpeed;
         this->finishTime = 0;
     }
+
+    int stimulate(std::vector<int>& stimulateUsers) {
+        // 在该NPU上模拟0-6e4时间内的执行情况，返回完成请求的用户数量
+        int completedCount = 0;
+        std::vector<User> usersCopy = users; // 进行信息备份,防止信息覆盖
+        std::priority_queue<arr2, std::vector<arr2>, std::greater<arr2> > newUsers; 
+        // 按照(time, userId)的格式排序，
+        std::priority_queue<arr2> needSendUsers;
+        // 按照(prior, userId)的格式存储
+        int finishTime = 0, maxTime = 6e4;  
+        // std::vector<std::vector<std::array<int, 4> > > ans(M + 1);
+
+        for (int userId: stimulateUsers) {
+            newUsers.push({users[userId].startTime, userId});
+        }
+        
+        // std::cout << "start stimulate" << std::endl;
+
+        for (int curretTime = 0; curretTime <= maxTime; curretTime ++) {
+            while (!newUsers.empty() and newUsers.top()[0] <= curretTime) {
+                // std::cout << 1 << std::endl;
+                arr2 tp = newUsers.top();
+                newUsers.pop();
+                int userId = tp[1];
+                needSendUsers.push({users[userId].prior, userId});
+            }
+
+            if (!needSendUsers.empty() and finishTime - curretTime <= 20) {
+                // 如果当前结束时间较早，那么就给npu新分配一个任务
+                int userId = needSendUsers.top()[1];
+                needSendUsers.pop();
+
+                // 如果当前用户的预测结束时间已经超时，那么该用户就不再发送任务
+
+                int batchSize = std::min(users[userId].remainCount, maxBatchSize);
+                int handleTime = calculateInferenceTime(batchSize);
+                int sendTime = std::max(curretTime, finishTime - latency[severId][userId]);
+
+                int cnt = users[userId].remainCount / maxBatchSize;
+                int resBatchSize = users[userId].remainCount - cnt * maxBatchSize;
+                int maxBatchHandleTime = calculateInferenceTime(maxBatchSize);
+                int resBatchHandleTime = calculateInferenceTime(resBatchSize);
+                int predictEndTime = std::max(latency[severId][userId], maxBatchHandleTime) * cnt 
+                    + resBatchHandleTime + finishTime;
+
+                int arriveTime = std::max(finishTime, sendTime + latency[severId][userId]);
+                
+                if (predictEndTime <= users[userId].endTime) {
+                    finishTime = std::max(finishTime, sendTime + latency[severId][userId]) + handleTime;
+                    ans[userId].push_back({sendTime, severId, id, batchSize});
+                    users[userId].remainCount -= batchSize;
+                    if (users[userId].remainCount > 0) {
+                        // if (userId == 131) {
+                            // std::clog << "sendTime: " << sendTime 
+                            // << " next time: " << sendTime + latency[id][userId] + 1
+                            // << std::endl;
+                        // }
+                        newUsers.push({sendTime + latency[severId][userId] + 1, userId});
+                    } else {
+                        if (finishTime <= users[userId].endTime) {
+                            completedCount += 1;
+                        }
+                    }
+                }
+                
+
+            }
+        }
+        std::clog << "completed count: " << completedCount << std::endl;
+
+        return completedCount;
+    }
     
 };
 std::vector<std::vector<NPU> > npus(11); // 最多11个服务器
-
-
-class User {
-public:
-    int id; // 用户id
-    int startTime; // 请求开始时间
-    int endTime; // 请求结束时间
-    int requestCount; // 请求数量
-    int remainCount; // 剩余的未完成的请求数量
-
-    int prior; // 用户的优先级
-    User(){};
-    User(int id, int startTime, int endTime, int requestCount) {
-        this->id = id;
-        this->startTime = startTime;
-        this->endTime = endTime;
-        this->requestCount = requestCount;
-        this->remainCount = requestCount;
-        this->prior = 1e5 * requestCount / (this->endTime - this->startTime);
-    }
-};
-std::vector<User> users;
-std::vector<std::vector<int> > latency; // 用户将请求发送到服务器上的时延
-
 
 void solve() {
     std::cin >> N;
@@ -100,135 +172,66 @@ void solve() {
         }
     }
 
-    std::clog << "delay 1 3: " << latency[1][1] << std::endl; 
     std::cin >> A >> B;
     std::clog << A << " " << B << std::endl;
+    // std::clog << "latency 4 131: " << latency[4][131] << std::endl;
     
-    
-    std::vector<std::vector<std::array<int, 4> > > ans(M + 1); 
-    // 最终输出(time, serverId, npuId, batchSize)
-    std::vector<arr2> userNpu(M + 1); // 用户指定的npu;
+    // 为每个用户分配一个推理时间最少的npu
+    std::priority_queue<arr3> offLoad;
 
-    std::priority_queue<arr2, std::vector<arr2>, std::greater<arr2> > newUsers; 
-    // 按照(time, userId)的格式排序，
-    std::priority_queue<arr4, std::vector<arr4>, std::greater<arr4> > npuOffload; 
-    // 自动按照 (offload, inferenceAbility, serverId, npuId)的标准进行排序
-
-    std::priority_queue<arr2> needSendUsers;
-    // 按照(prior, userId)的格式存储
-
-
-    for (int i = 1; i <= M; i ++) {
-        newUsers.push({users[i].startTime, i});
-    }
-
+    std::vector<std::vector<std::vector<int> > > assignment(N + 1);
     for (int i = 1; i <= N; i ++) {
+        assignment[i].resize(npus[i].size());
         for (int j = 1; j < (int)npus[i].size(); j ++) {
             npus[i][j].init();
-            npuOffload.push({0, -npus[i][j].inferenceAbility, i, j});
+            offLoad.push({0, i, j});
+            // npuOffload.push({0, -npus[i][j].inferenceAbility, i, j});
         }
     }
 
-    // std::cout << newUsers.top()[0] << std::endl;
-    int completedUserCount = 0;
-    for (int currentTime = 0; currentTime <= 6e4; currentTime ++) {
-        if (completedUserCount >= M) break;
-        // std::cout << "current time: " << currentTime << std::endl;
-        while (!newUsers.empty() and newUsers.top()[0] <= currentTime) {
-            arr2 tp = newUsers.top();
-            newUsers.pop();
-            int userId = tp[1];
-            needSendUsers.push({users[userId].prior, userId});
-            // std::cout << "new user time: " << tp[0] << std::endl;
-        }
+    std::vector<std::array<int, 2> > userNpu(M + 1, {0, 0});
+    ans.resize(M + 1);
 
 
-        while (!needSendUsers.empty()) {
-            int userId = needSendUsers.top()[1];
-            int serverId = userNpu[userId][0], npuId = userNpu[userId][1];
-            // std::cout << "userId, npu: " << userId << " " << serverId << " " << npuId << std::endl;
-            if (serverId == 0 or npus[serverId][npuId].finishTime - currentTime >= 60) {
-                // 满足此时条件，为当前用户寻找一个新的NPU
-                // 如果找得到，就分配到新的npu上，如果找不到，后续用户也找不到对应npu,直接break
-                arr4 topNpu = npuOffload.top();
-                if (topNpu[0] - currentTime >= 20) {
-                    // std::cout << "cannot find npu with less offload" << std::endl;
-                    break;
-                } else {
-                    needSendUsers.pop();
-                    serverId = topNpu[2], npuId = topNpu[3];
-                    userNpu[userId] = {serverId, npuId};
-                    
-                    // std::cout << "new npuId: " << serverId << " " << npuId << std::endl;
+    int currentServerId = 1, currentNpuId = 1;
+    for (int i = 1; i <= M; i ++) {
+        assignment[currentServerId][currentNpuId].push_back(i);
+        userNpu[i] = {currentServerId, currentNpuId};
 
-                    NPU& npu = npus[serverId][npuId];
-                    int sendTime = std::max(currentTime, npu.finishTime - latency[serverId][userId]);
-                    int batchSize = std::min(npu.maxBatchSize, users[userId].remainCount);
-                    int handleTime = npu.calculateInferenceTime(batchSize);
-                    if (sendTime < users[userId].endTime) {
-                        ans[userId].push_back({sendTime, serverId, npuId, batchSize});
-                        users[userId].remainCount -= batchSize;
-                    
-                        npu.finishTime = std::max(npu.finishTime, sendTime + latency[serverId][userId]) + handleTime;
-                        npuOffload.pop();
-                        npuOffload.push({npu.finishTime, -npu.inferenceAbility, serverId, npuId});
-
-                        // 如果当前用户的请求未完成，就在之后再维护这个用户的信息
-                        if (users[userId].remainCount > 0) {
-                            // std::cout << 
-                            newUsers.push({sendTime + latency[serverId][userId] + 1, userId});
-                        }
-
-                    } 
-                    
-                }
-            } else {
-                // 当前npu的负载较低，可以发送请求
-                needSendUsers.pop();
-                NPU& npu = npus[serverId][npuId];
-                int sendTime = std::max(currentTime, npu.finishTime - latency[serverId][userId]);
-                int batchSize = std::min(npu.maxBatchSize, users[userId].remainCount);
-                int handleTime = npu.calculateInferenceTime(batchSize);
-                
-                if (sendTime < users[userId].endTime) {
-                    ans[userId].push_back({sendTime, serverId, npuId, batchSize});
-                    users[userId].remainCount -= batchSize;
-                
-                    npu.finishTime = std::max(npu.finishTime, sendTime + latency[serverId][userId]) + handleTime;
-                    npuOffload.pop();
-                    npuOffload.push({npu.finishTime, -npu.inferenceAbility, serverId, npuId});
-
-                    // 如果当前用户的请求未完成，就在之后再维护这个用户的信息
-                    if (users[userId].remainCount > 0) {
-                        // std::cout << 
-                        newUsers.push({sendTime + latency[serverId][userId] + 1, userId});
-                    }
-
-                } 
+        currentNpuId += 1;
+        if (currentNpuId >= (int)npus[currentServerId].size()) {
+            currentServerId += 1;
+            currentNpuId = 1;
+            if (currentServerId > N) {
+                currentServerId = 1;
             }
         }
-
     }
 
-
-    // for (int i = 1; i <= M; i ++) { 
-    //     sort(ans[i].begin(), ans[i].end());
-    //     // std::cout << ans[i].size() << std::endl;
-    //     for (int j = 0; j < (int)ans[i].size(); j ++) {
-    //         // std::cout << ans[i][j][0] << " " << ans[i][j][1] << " "
-    //         //     << ans[i][j][2] << " " << ans[i][j][3] << " ";
-    //         if (ans[i][j][0] < users[i].startTime) {
-    //             std::vector<NPU> allnpus(1e9);
-    //         }
-    //         if (j) {
-    //             int d = ans[i][j][0] - ans[i][j - 1][0];
-    //             if (d < 0) {
-    //                 // std::vector<NPU> allnpus(1e9);
-    //             }
-    //         }
-    //     }
-    //     // std::cout << std::endl;
+    // for (int i = 1; i <= M; i ++) {
+    //     arr3 tp = offLoad.top();
+    //     offLoad.pop();
+    //     int lastOffLoad = tp[0], serverId = tp[1], npuId = tp[2];
+    //     NPU& npu = npus[serverId][npuId];
+    //     int cnt = users[i].remainCount / npu.maxBatchSize;
+    //     int resBatchSize = users[i].remainCount - cnt * npu.maxBatchSize;
+    //     int maxBatchHandleTime = npu.calculateInferenceTime(npu.maxBatchSize);
+    //     int resBatchHandleTime = npu.calculateInferenceTime(resBatchSize);
+    //     int currentOffLoad = lastOffLoad - maxBatchHandleTime - resBatchHandleTime;
+    //     offLoad.push({currentOffLoad, serverId, npuId});
+    //     assignment[serverId][npuId].push_back(i);
+    //     userNpu[i] = {serverId, npuId};
     // }
+
+
+    for (int i = 1; i <= N; i ++) {
+        assignment[i].resize(npus[i].size());
+        for (int j = 1; j < (int)npus[i].size(); j ++) {
+            if(assignment[i][j].size() > 0) {
+                npus[i][j].stimulate(assignment[i][j]);
+            }
+        }
+    }
 
 
     // 如果此时还有用户的请求没有完成，在原本的npu上分配剩余的任务，
@@ -246,22 +249,13 @@ void solve() {
         }
     }
 
+
     for (int i = 1; i <= M; i ++) { 
         sort(ans[i].begin(), ans[i].end());
         std::cout << ans[i].size() << std::endl;
         for (int j = 0; j < (int)ans[i].size(); j ++) {
-            // if (ans[i][j][0] < users[i].startTime) {
-            //     std::vector<NPU> allnpus(1e9);
-            // }
-            
             std::cout << ans[i][j][0] << " " << ans[i][j][1] << " "
                 << ans[i][j][2] << " " << ans[i][j][3] << " ";
-            if (j) {
-                int d = ans[i][j][0] - ans[i][j - 1][0];
-                if (d <= latency[ans[i][j][1]][i]) {
-                    // std::vector<NPU> allnpus(1e9);
-                }
-            }
         }
         std::cout << std::endl;
     }

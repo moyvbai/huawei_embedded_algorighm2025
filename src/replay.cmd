@@ -1,0 +1,1 @@
+D:/miniconda3/envs/TCAD/python.exe replay_game.py --file memory_log.txt

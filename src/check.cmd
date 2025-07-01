@@ -1,1 +1,0 @@
-D:/miniconda3/envs/TCAD/python.exe checker.py  ../data/data.in  out.txt

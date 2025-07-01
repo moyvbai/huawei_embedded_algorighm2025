@@ -160,9 +160,10 @@ class Scorer:
         events.sort()
         
         max_time = events[-1][0] + 60000 if events else 200000 # 估算一个最大模拟时间
-        
+        # max_time = 1000000
         # 模拟主循环
         for t in range(max_time):
+            if t % 5000 == 0: print(f"Time: {t}/{max_time}")
             # 1. 移除已完成的请求
             for npu_id, req in list(npu_processing.items()):
                 if req and req['completion_time'] == t:
@@ -192,7 +193,7 @@ class Scorer:
                 npu_queues[npu_key].append({
                     'arrival_time': arrival_time, 'user_id': user_id, 'B': B, 'send_time': send_time
                 })
-
+                # if len(npu_queues[npu_key]) > 2 and arrival_time < 60000: print(len(npu_queues[npu_key]), arrival_time)
             # 3. 对所有队列排序并分配资源
             for server in self.servers:
                 for npu_idx in range(1, server['g'] + 1):
@@ -245,7 +246,8 @@ class Scorer:
         if self.errors:
             self._print_errors()
             return
-            
+
+        print("Simulation Complete, Usage Time: ", self.total_simulation_time)
         # 4. 计算分数
         self._calculate_score(user_progress)
         # 绘图
@@ -516,7 +518,12 @@ class Scorer:
             total_score += h(h_time_factor) * p(move_i) * 10000
 
         final_score = h(K) * total_score
-        
+
+        print("="*20 + " Scoring Result " + "="*20)
+        print(f"Final Score: {final_score:.4f}")
+        print(f"Total Users Missing Deadline (K): {K}")
+        print("-" * 56)
+
         with open("result", 'w') as file:
             print("="*20 + " Scoring Result " + "="*20, file=file)
             print(f"Final Score: {final_score:.4f}", file=file)
@@ -558,6 +565,16 @@ class Scorer:
                 print(f"{server_id:<8}{npu_id_val:<5}{busy_time:<18}{util_percent:.2f}", file=file)
             print("="*74, file=file)
 
+        header = f"{'Server':<8}{'NPU':<5}{'Busy Time (ms)':<18}{'Utilization (%)':<15}"
+        print(header)
+        print('-' * len(header))
+        for npu_key in sorted_npu_keys:
+            busy_time = self.npu_busy_time[npu_key]
+            server_id, npu_id_val = npu_key
+            util_percent = (busy_time / self.total_simulation_time) * 100 if self.total_simulation_time > 0 else 0
+            print(f"{server_id:<8}{npu_id_val:<5}{busy_time:<18}{util_percent:.2f}")
+        print("="*74)
+
     def _print_errors(self):
         print("="*20 + " Validation Failed " + "="*20, file=sys.stderr)
         for error in self.errors:
@@ -572,9 +589,6 @@ if __name__ == '__main__':
         
     input_file = sys.argv[1]
     output_file = sys.argv[2]
-    # input_file = "D:\VScodeFile\C++\HUAWEI\data\data.in"
-    # output_file = "D:\VScodeFile\C++\HUAWEI\src\out.txt"
-
-
+    
     scorer = Scorer(input_path=input_file, output_path=output_file)
     scorer.run()

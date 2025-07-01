@@ -258,7 +258,8 @@ void Simulator::run() {
         }
 
         // 4. ¼ÇÂ¼ÈÕÖ¾
-        for (const auto& [gid, npu] : npu_map) {
+        for (auto& gid: npus_to_re_evaluate) {
+            auto& npu = npu_map[gid];
             memory_log.push_back({current_time, gid, npu.server_id, npu.local_id, npu.used_memory, npu.memory_limit});
         }
         
@@ -278,6 +279,7 @@ void Simulator::run() {
         }
         current_time++;
     }
+    // std::cout << npu_map.size() << std::endl;
     std::cout << std::endl;
     std::cout << "Simulation Finished at time: " << current_time - 1 << " ms." << std::endl;
 }
@@ -324,7 +326,7 @@ void Simulator::save_memory_log(const std::string& filepath) {
     file << std::left << std::setw(10) << "Time" << std::setw(15) << "NPU_Global_ID" << std::setw(12) << "Server_ID" << std::setw(14) << "NPU_Local_ID" << std::setw(15) << "Used_Memory" << "Max_Memory" << "\n";
     file << std::string(80, '-') << "\n";
     for (const auto& entry : memory_log) {
-        if (entry.used_memory > 0) {
+        if (entry.used_memory >= 0) {
             file << std::left << std::setw(10) << entry.time << std::setw(15) << entry.npu_global_id << std::setw(12) << entry.server_id << std::setw(14) << entry.npu_local_id << std::setw(15) << entry.used_memory << entry.max_memory << "\n";
         }
     }

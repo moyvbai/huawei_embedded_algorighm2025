@@ -11,9 +11,10 @@ import matplotlib.cm as cm
 WHITE, GRAY, BLACK = (230, 230, 230), (120, 120, 120), (20, 20, 20)
 GRID_COLOR, BACKGROUND_COLOR, PANEL_COLOR = (60, 60, 60), (30, 30, 30), (40, 40, 40)
 BUTTON_COLOR, BUTTON_HOVER_COLOR = (80, 80, 80), (110, 110, 110)
-SCRUBBER_COLOR, SCRUBBER_HANDLE_COLOR, BAR_COLOR = (80, 80, 80), (150, 150, 250), (70, 70, 180)
-SCREEN_WIDTH, SCREEN_HEIGHT = 1280, 720
-PADDING, LEGEND_WIDTH, BOTTOM_PANEL_HEIGHT = 60, 220, 60
+SCRUBBER_COLOR, SCRUBBER_HANDLE_COLOR = (80, 80, 80), (150, 150, 250)
+BAR_COLOR_CURRENT, BAR_COLOR_UTIL = (70, 70, 180), (70, 180, 70) 
+SCREEN_WIDTH, SCREEN_HEIGHT = 1600, 720
+PADDING, LEGEND_WIDTH, BOTTOM_PANEL_HEIGHT = 60, 280, 60
 BASE_SPEED_SCALER = 0.1
 
 class Button:
@@ -48,7 +49,7 @@ class ScrollablePanel:
         pygame.draw.rect(screen, GRAY, self.rect, 1, 5)
 
 def load_data(filepath):
-    """加载并解析日志文件"""
+    """加载、解析并预处理日志文件"""
     print(f"Loading data from '{filepath}'...")
     try:
         df = pd.read_csv(filepath, sep=r'\s+', skiprows=[1], index_col=False)
@@ -60,8 +61,15 @@ def load_data(filepath):
                 first_row = npu_df.iloc[0]
                 new_rows.append({'Time': 0, 'NPU_Global_ID': npu_id, 'Server_ID': first_row['Server_ID'], 'NPU_Local_ID': first_row['NPU_Local_ID'], 'Used_Memory': 0, 'Max_Memory': first_row['Max_Memory']})
         if new_rows:
-            df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True).sort_values(by=['Time', 'NPU_Global_ID']).reset_index(drop=True)
-            print("Pre-processed data: ensured all NPUs have a state at t=0.")
+            df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+        
+        df.sort_values(by=['NPU_Global_ID', 'Time'], inplace=True)
+        df['Time_Diff'] = df.groupby('NPU_Global_ID')['Time'].diff()
+        df['Prev_Used_Memory'] = df.groupby('NPU_Global_ID')['Used_Memory'].shift(1)
+        df['Mem_Time_Area'] = df['Prev_Used_Memory'] * df['Time_Diff']
+        df['Cumulative_Mem_Time'] = df.groupby('NPU_Global_ID')['Mem_Time_Area'].cumsum().fillna(0)
+        print("Pre-processed data: calculated cumulative memory-time product.")
+
         print(f"Data loaded successfully. Found {df['Time'].max()}ms of records.")
         df['NPU_Global_ID'] = df['NPU_Global_ID'].astype('category')
         npu_groups = {npu_id: group.copy() for npu_id, group in df.groupby('NPU_Global_ID', observed=False)}
@@ -126,19 +134,21 @@ def main():
     graph_rect = pygame.Rect(PADDING, PADDING, SCREEN_WIDTH - PADDING * 2 - LEGEND_WIDTH, SCREEN_HEIGHT - PADDING * 2 - BOTTOM_PANEL_HEIGHT)
     scrubber_rect = pygame.Rect(PADDING, graph_rect.bottom + 40, graph_rect.width, 10)
     sidebar_x = graph_rect.right + PADDING / 2
-    upper_sidebar_rect = pygame.Rect(sidebar_x, PADDING, LEGEND_WIDTH - PADDING/2, graph_rect.height // 2 - 10)
-    lower_sidebar_rect = pygame.Rect(sidebar_x, upper_sidebar_rect.bottom + 20, LEGEND_WIDTH - PADDING/2, graph_rect.height // 2 - 10)
+    upper_sidebar_rect = pygame.Rect(sidebar_x, PADDING, LEGEND_WIDTH, graph_rect.height // 2 - 10)
+    lower_sidebar_rect = pygame.Rect(sidebar_x, upper_sidebar_rect.bottom + 20, LEGEND_WIDTH, graph_rect.height // 2 - 10)
 
     is_paused, is_scrubbing, speed_index = False, False, 4
     SPEED_LEVELS = [0.01, 0.05, 0.1, 0.5, 1, 2, 3, 5, 10, 20, 50]
     npu_visibility = {npu_id: True for npu_id in npu_ids}
 
     pause_button = Button((PADDING, 10, 80, 30), "Pause", ui_font)
-    speed_button = Button((PADDING + 90, 10, 120, 30), f"Speed: {SPEED_LEVELS[speed_index]:g}x", ui_font)
+    speed_decrease_button = Button((PADDING + 90, 10, 40, 30), "-", ui_font)
+    speed_increase_button = Button((PADDING + 230, 10, 40, 30), "+", ui_font)
+    speed_display_rect = pygame.Rect(PADDING + 135, 10, 90, 30)
     
     npu_panel = ScrollablePanel(upper_sidebar_rect)
-    select_all_button = Button((10, 40, 90, 25), "Select All", ui_font, upper_sidebar_rect)
-    deselect_all_button = Button((110, 40, 90, 25), "Deselect All", ui_font, upper_sidebar_rect)
+    select_all_button = Button((10, 40, 120, 25), "Select All", ui_font, upper_sidebar_rect)
+    deselect_all_button = Button((140, 40, 120, 25), "Deselect All", ui_font, upper_sidebar_rect)
     legend_entries, entry_y = [], 75
     for npu_id in npu_ids:
         entry_rect = pygame.Rect(10, entry_y, upper_sidebar_rect.width - 20, 20)
@@ -159,16 +169,16 @@ def main():
             
             if event.type == pygame.MOUSEWHEEL:
                 if graph_rect.collidepoint(mouse_pos):
-                    if event.y > 0: # 向上滚轮, 缩小窗口 (Zoom In)
+                    if event.y > 0:
                         zoom_step = int(current_window_size * 0.1) or 1
-                        # 【修改】将最小窗口限制从100改为20
                         current_window_size = max(20, current_window_size - zoom_step)
-                    elif event.y < 0: # 向下滚轮, 放大窗口 (Zoom Out)
+                    elif event.y < 0:
                         zoom_step = int(current_window_size * 0.2) or 1
                         current_window_size = min(max_time, current_window_size + zoom_step)
             
             if pause_button.handle_event(event, mouse_pos): is_paused = not is_paused
-            if speed_button.handle_event(event, mouse_pos): speed_index = (speed_index + 1) % len(SPEED_LEVELS)
+            if speed_decrease_button.handle_event(event, mouse_pos): speed_index = max(0, speed_index - 1)
+            if speed_increase_button.handle_event(event, mouse_pos): speed_index = min(len(SPEED_LEVELS) - 1, speed_index + 1)
             if select_all_button.handle_event(event, mouse_pos): npu_visibility = {npu_id: True for npu_id in npu_ids}
             if deselect_all_button.handle_event(event, mouse_pos): npu_visibility = {npu_id: False for npu_id in npu_ids}
 
@@ -196,8 +206,9 @@ def main():
         
         for npu_id, group_df in npu_groups.items():
             if npu_visibility.get(npu_id):
-                last_point_before = group_df[group_df['Time'] < start_time].tail(1)
-                points_in_window = group_df[(group_df['Time'] >= start_time) & (group_df['Time'] <= end_time)]
+                sub_df = group_df[group_df['Time'] <= end_time]
+                last_point_before = sub_df[sub_df['Time'] < start_time].tail(1)
+                points_in_window = sub_df[(sub_df['Time'] >= start_time)]
                 plot_points_data, last_mem = [], 0
                 if not last_point_before.empty: last_mem = last_point_before.iloc[0]['Used_Memory']
                 plot_points_data.append({'Time': start_time, 'Used_Memory': last_mem})
@@ -218,16 +229,22 @@ def main():
                     pixel_points.append((graph_rect.right, pixel_points[-1][1]))
                     pygame.draw.lines(screen, npu_color_map.get(npu_id), False, pixel_points, 2)
         
-        pause_button.text, speed_button.text = ("Play" if is_paused else "Pause"), f"Speed: {speed_multiplier:g}x"
-        pause_button.draw(screen)
-        speed_button.draw(screen)
-
+        pause_button.text = "Play" if is_paused else "Pause"
+        pause_button.draw(screen); speed_decrease_button.draw(screen); speed_increase_button.draw(screen)
+        pygame.draw.rect(screen, BLACK, speed_display_rect)
+        speed_surf = ui_font.render(f"{speed_multiplier:g}x", True, WHITE)
+        screen.blit(speed_surf, speed_surf.get_rect(center=speed_display_rect.center))
+        
+        title_surf = title_font.render("NPU Memory Usage Replay", True, WHITE)
+        screen.blit(title_surf, (SCREEN_WIDTH - PADDING - title_surf.get_width(), 10))
+        info_text = f"Time: {start_time:7d} ms | Window: {current_window_size} ms"
+        info_surf = ui_font.render(info_text, True, GRAY)
+        screen.blit(info_surf, (SCREEN_WIDTH - PADDING - info_surf.get_width(), 15 + title_surf.get_height()))
+        
         npu_panel_surf = npu_panel.get_surface()
         npu_panel_surf.fill(PANEL_COLOR)
-        title_surf = title_font.render("NPU Selector", True, WHITE)
-        npu_panel_surf.blit(title_surf, (10, 5))
-        select_all_button.draw(npu_panel_surf)
-        deselect_all_button.draw(npu_panel_surf)
+        npu_panel_surf.blit(title_font.render("NPU Selector", True, WHITE), (10, 5))
+        select_all_button.draw(npu_panel_surf); deselect_all_button.draw(npu_panel_surf)
         for entry in legend_entries:
             text_color = WHITE if npu_visibility[entry['id']] else GRAY
             pygame.draw.rect(npu_panel_surf, entry['color'], (entry['rect'].x + 10, entry['rect'].y + 2, 15, 15))
@@ -236,27 +253,45 @@ def main():
         
         data_panel_surf = data_panel.get_surface()
         data_panel_surf.fill(PANEL_COLOR)
-        title_surf = title_font.render("Real-time Usage (%)", True, WHITE)
-        data_panel_surf.blit(title_surf, (10, 5))
+        data_panel_surf.blit(title_font.render("Data @ Time Cursor", True, WHITE), (10, 5))
         rt_y = 35
         for npu_id in npu_ids:
             last_point = df[(df['Time'] <= start_time) & (df['NPU_Global_ID'] == npu_id)].tail(1)
-            percent = 0.0
+            percent_curr, percent_util = 0.0, 0.0
             if not last_point.empty:
                 row = last_point.iloc[0]
-                percent = (row.Used_Memory / row.Max_Memory * 100) if row.Max_Memory > 0 else 0
+                max_mem = row.Max_Memory if row.Max_Memory > 0 else 1
+                percent_curr = (row.Used_Memory / max_mem) * 100
+                
+                # --- 【修正】采用您建议的、更直接的累计占用率算法 ---
+                # 1. 分子: 累计占用量 (Integral of Used Memory)
+                #    = 预计算到上个关键点的值 + (当前值 * (当前时间 - 上个关键点时间))
+                cumulative_used_area = row.Cumulative_Mem_Time + row.Used_Memory * (start_time - row.Time)
+                # 2. 分母: 累计理论总量 (Integral of Max Memory)
+                #    = 最大显存 * 当前总时长
+                cumulative_total_area = max_mem * start_time
+                # 3. 最终百分比
+                percent_util = (cumulative_used_area / cumulative_total_area * 100) if cumulative_total_area > 0 else 0
+
             text_color = WHITE if npu_visibility[npu_id] else GRAY
-            data_panel_surf.blit(font.render(f"NPU {npu_id}: {percent:.1f}%", True, text_color), (10, rt_y))
-            bar_bg_rect = pygame.Rect(10, rt_y + 15, lower_sidebar_rect.width - 20, 5)
+            # 【修改】将两个百分比绘制在同一行，并修改标签为 Util
+            text_line = f"NPU {npu_id:<2} | Curr: {percent_curr:5.1f}% | Util: {percent_util:5.1f}%"
+            data_panel_surf.blit(font.render(text_line, True, text_color), (10, rt_y))
+            
+            bar_y_start = rt_y + 15
+            bar_bg_rect = pygame.Rect(10, bar_y_start, lower_sidebar_rect.width - 20, 8)
             pygame.draw.rect(data_panel_surf, BLACK, bar_bg_rect)
-            pygame.draw.rect(data_panel_surf, BAR_COLOR, (bar_bg_rect.left, bar_bg_rect.top, bar_bg_rect.width * (percent / 100), bar_bg_rect.height))
-            rt_y += 30
+            pygame.draw.rect(data_panel_surf, BAR_COLOR_CURRENT, (bar_bg_rect.left, bar_bg_rect.top, bar_bg_rect.width * (percent_curr / 100), bar_bg_rect.height))
+            
+            bar_bg_rect.y += 10
+            pygame.draw.rect(data_panel_surf, BLACK, bar_bg_rect)
+            pygame.draw.rect(data_panel_surf, BAR_COLOR_UTIL, (bar_bg_rect.left, bar_bg_rect.top, bar_bg_rect.width * (percent_util / 100), bar_bg_rect.height))
+
+            rt_y += 40
         data_panel.content_height = rt_y
         data_panel.draw(screen, data_panel_surf)
             
         draw_scrubber(screen, scrubber_rect, ui_font, current_time, max_time)
-        title_text = f"Time: {start_time:7d} ms | Window: {current_window_size} ms"
-        screen.blit(title_font.render(title_text, True, WHITE), (graph_rect.left, 10))
         pygame.display.flip()
         clock.tick(60)
 

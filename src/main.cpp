@@ -267,7 +267,7 @@ public:
                 int predictEndTime = std::max(latency[serverId][userId], maxBatchHandleTime) * cnt 
                     + resBatchHandleTime + sendTime;
 
-                if (predictEndTime <= users[userId].endTime) {
+                if (predictEndTime <= users[userId].endTime and arriveTime + handleTime <= users[userId].endTime) {
                     ans[userId].push_back({sendTime, serverId, npuId, batchSize});
                     userRemainCount[userId] -= batchSize;
                     npuResBatchSize -= batchSize;
@@ -341,7 +341,7 @@ void solve() {
         }
     }
 
-    std::cin >> A >> B;
+    std::cin >> A >> B; 
     std::clog << A << " " << B << std::endl;
 
     std::vector<std::vector<std::array<int, 4> > > ans(M + 1);

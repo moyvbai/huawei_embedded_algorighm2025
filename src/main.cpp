@@ -310,18 +310,11 @@ public:
                 ans[userId].push_back({sendTime, serverId, npuId, batchSize});
                 userRemainCount[userId] -= batchSize;
                 
-                // if (userId == 198) {
-                //     std::clog << "user 198: send batchsize " << batchSize << std::endl;
-                //     std::clog << "user 198: " << userRemainCount[userId] << std::endl;
-                // }
-                
+
                 if (userRemainCount[userId] > 0) {
                     waitingUsers.push({arriveTime + latency[serverId][userId] + 1, userId});
                 } else {
-                    // if (userId == 198) {
-                    //     std::clog << "198:  " << arriveTime + handleTime
-                    //     << " ddl: " << users[userId].endTime << std::endl;
-                    // }
+                    
                     if (arriveTime + handleTime <= users[userId].endTime) {
                         // if (userId == 198) {
                         //     std::clog << "198:  over " << std::endl;
@@ -331,6 +324,9 @@ public:
                     }
                 }
                 
+                if (batchSize <= blockSize) batchSize = blockSize;
+                else batchSize = maxBatchSize;
+
                 for (int t = arriveTime; t < endTime; t ++) {
                     memeoryUsage[t] += (batchSize * A + B);
                 }
@@ -468,7 +464,7 @@ void solve() {
     });
 
     std::clog << "before iter, timeout count: " << timeoutUsers.size() << std::endl;
-    // std::vector<int> newTimeoutUsers;
+    std::vector<int> newTimeoutUsers;
     // for (int userId: timeoutUsers) {
     //     // std::clog << "try " << userId << std::endl;
     //     bool assignSuccess = false;
@@ -495,12 +491,12 @@ void solve() {
     //     }
     //     if (!assignSuccess) newTimeoutUsers.push_back(userId);
     // }
-    std::clog << "over!" << std::endl;
-    std::clog << simulators[1][1].completedUsers.size() << std::endl;
-    std::clog << simulators[1][1].timeoutUsers.size() << std::endl;
+    // std::clog << "over!" << std::endl;
+    // std::clog << simulators[1][1].completedUsers.size() << std::endl;
+    // std::clog << simulators[1][1].timeoutUsers.size() << std::endl;
     // timeoutUsers = newTimeoutUsers;
 
-    std::clog << "after iter, timeout count: " << timeoutUsers.size() << std::endl;
+    // std::clog << "after iter, timeout count: " << timeoutUsers.size() << std::endl;
 
     for (int i = 1; i <= N; i ++) {
         for (int j = 1; j <(int)npus[i].size(); j ++) {

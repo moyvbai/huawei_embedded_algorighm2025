@@ -1,12 +1,11 @@
 // validator.cpp
-// C++版高性能验证与评分脚本 (统一日志格式版)
+// C++版高性能验证与评分脚本 (最终修复版)
 //
 // 编译命令 (Windows下使用g++):
 // g++ -std=c++17 -O2 -o validator.exe validator.cpp
 //
 // 编译命令 (Linux/macOS):
 // g++ -std=c++17 -O2 -o validator validator.cpp
-
 
 #include <iostream>
 #include <fstream>
@@ -20,21 +19,7 @@
 #include <set>
 #include <iomanip>
 
-// --- 【修改1】更新QueueLogEntry结构体 ---
-struct MemoryLogEntry {
-    long long time;
-    int npu_global_id, server_id, npu_local_id, used_memory, max_memory;
-};
-
-struct QueueLogEntry {
-    long long time;
-    int npu_global_id;
-    int server_id;    // 新增
-    int npu_local_id; // 新增
-    int queue_size;
-};
-
-// 其他数据结构无变化
+// --- 数据结构定义 (无变化) ---
 struct Request {
     int user_id, server_id, npu_id, batch_size;
     long long send_time, arrival_time;
@@ -51,8 +36,12 @@ struct Server {
 };
 struct User {
     int id, cnt_required, cnt_processed = 0, last_npu_global_id = -1, migrations = 0;
-    long long s, e, finish_time = -1, next_allowed_send_time;
+    long long s, e, finish_time = -1, next_allowed_send_time; // 这个值将在run()中被使用和更新
     std::vector<Request> requests;
+};
+struct MemoryLogEntry {
+    long long time;
+    int npu_global_id, server_id, npu_local_id, used_memory, max_memory;
 };
 
 // --- 核心模拟器类 ---
@@ -62,7 +51,6 @@ public:
     void run();
     void calculate_score();
     void save_memory_log(const std::string& filepath = "memory_log.txt");
-    void save_queue_log(const std::string& filepath = "queue_log.txt");
 
 private:
     std::vector<Server> servers;
@@ -71,10 +59,7 @@ private:
     std::map<std::pair<int, int>, int> latencies;
     int mem_a, mem_b;
     long long total_samples_to_process = 0;
-    
     std::vector<MemoryLogEntry> memory_log;
-    std::vector<QueueLogEntry> queue_log;
-
     enum class EventType { SEND, ARRIVE };
     std::map<long long, std::vector<std::pair<EventType, Request>>> events;
     void parse_input(const std::string& path);
@@ -86,8 +71,10 @@ private:
 // --- 主程序 ---
 int main(int argc, char* argv[]) {
     std::ios_base::sync_with_stdio(false);
+
     if (argc != 3) {
-        std::cerr << "\nUsage: " << argv[0] << " <input.txt> <output.txt>\n";
+        std::cerr << "\nUsage: " << argv[0] << " <path_to_input_file> <path_to_output_file>" << std::endl;
+        std::cerr << "Example: " << argv[0] << " ./input.txt ./output.txt\n" << std::endl;
         return 1;
     }
     try {
@@ -95,7 +82,6 @@ int main(int argc, char* argv[]) {
         simulator.run();
         simulator.calculate_score();
         simulator.save_memory_log();
-        simulator.save_queue_log();
     } catch (const std::exception& e) {
         std::cerr << "\nAn unexpected error occurred: " << e.what() << std::endl;
         return 1;
@@ -104,7 +90,6 @@ int main(int argc, char* argv[]) {
 }
 
 // --- Simulator类方法实现 ---
-// ... parse_input, parse_output 等未修改的函数已省略 ...
 Simulator::Simulator(const std::string& input_path, const std::string& output_path) {
     std::cout << "--- 1. Parsing Input File ---" << std::endl;
     parse_input(input_path);
@@ -139,7 +124,7 @@ void Simulator::parse_input(const std::string& path) {
     for (int i = 0; i < m_users; ++i) {
         User u; u.id = i + 1;
         file >> u.s >> u.e >> u.cnt_required;
-        u.next_allowed_send_time = u.s;
+        u.next_allowed_send_time = u.s; // 初始化，供run()使用
         users[u.id] = u;
         total_samples_to_process += u.cnt_required;
     }
@@ -160,24 +145,33 @@ void Simulator::parse_output(const std::string& path) {
         int user_id = i + 1; User& user = users.at(user_id);
         int t_i;
         if (!(file >> t_i)) fail_with_error("Output File Format", "Could not read T_i for user " + std::to_string(user_id));
-        if (t_i < 1 || t_i > 300) fail_with_error("Invalid Output Constraint", "User " + std::to_string(user_id) + ": T_i=" + std::to_string(t_i) + " is not in range [1, 300].");
+        if (t_i < 1 || t_i > 300) fail_with_error("Invalid Output Constraint", "User " + std::to_string(user_id) + ": T_i=" + std::to_string(t_i) + " is out of range [1, 300].");
         std::getline(file, line);
         if (!std::getline(file, line)) fail_with_error("Output File Format", "Missing request line for user " + std::to_string(user_id));
         std::stringstream ss(line);
         long long user_total_samples = 0;
+        
+        // 【修正点】使用一个临时变量进行校验，不污染user对象的原始状态
         long long temp_next_allowed_send_time = user.s; 
+
         for (int j = 0; j < t_i; ++j) {
             Request req; req.user_id = user_id;
             if (!(ss >> req.send_time >> req.server_id >> req.npu_id >> req.batch_size)) fail_with_error("Output File Format", "User " + std::to_string(user_id) + ": Not enough integers for request " + std::to_string(j+1));
+            
+            // 使用临时变量进行检查
             if (req.send_time < temp_next_allowed_send_time) fail_with_error("Invalid User Send Time (Static Check)", "User " + std::to_string(user_id) + " req " + std::to_string(j+1) + ": time " + std::to_string(req.send_time) + " < " + std::to_string(temp_next_allowed_send_time) + ".");
+            
             if (req.send_time > 1000000) fail_with_error("Invalid User Send Time", "User " + std::to_string(user_id) + " req " + std::to_string(j + 1) + ": time " + std::to_string(req.send_time) + " > 1,000,000.");
             if (req.server_id < 1 || (size_t)req.server_id > servers.size()) fail_with_error("Invalid Server Index", "User " + std::to_string(user_id) + " req " + std::to_string(j + 1) + ": server index " + std::to_string(req.server_id) + " out of bounds.");
             const Server& server = servers[req.server_id - 1];
             if (req.npu_id < 1 || req.npu_id > server.npu_count) fail_with_error("Invalid NPU Index", "User " + std::to_string(user_id) + " req " + std::to_string(j + 1) + ": NPU index " + std::to_string(req.npu_id) + " out of bounds for server " + std::to_string(req.server_id));
             if (mem_a * req.batch_size + mem_b > server.memory) fail_with_error("Batchsize Exceeds Memory", "User " + std::to_string(user_id) + " req " + std::to_string(j + 1) + ": batch size " + std::to_string(req.batch_size) + " exceeds server " + std::to_string(req.server_id) + "'s memory.");
+            
             user_total_samples += req.batch_size;
             req.arrival_time = req.send_time + latencies.at({user_id, req.server_id});
             user.requests.push_back(req);
+
+            // 更新临时变量以供下一次循环校验
             temp_next_allowed_send_time = req.arrival_time + 1;
         }
         if (user_total_samples != user.cnt_required) fail_with_error("Samples Not Fully Processed", "User " + std::to_string(user_id) + ": Total batch sizes sum to " + std::to_string(user_total_samples) + ", but " + std::to_string(user.cnt_required) + " were required.");
@@ -193,16 +187,19 @@ void Simulator::populate_initial_events() {
 }
 
 void Simulator::run() {
-    std::cout << "--- 3. Starting Simulation (with separated logs) ---" << std::endl;
+    std::cout << "--- 3. Starting Simulation (Final Corrected) ---" << std::endl;
     long long current_time = 0;
     long long processed_samples = 0;
     std::set<int> npus_to_re_evaluate;
+
     int last_percent = -1;
     const int BAR_WIDTH = 50;
 
     while (processed_samples < total_samples_to_process) {
         if (current_time > 2000000) fail_with_error("Simulation Timeout", "Simulation exceeded maximum time limit (2,000,000ms).");
         npus_to_re_evaluate.clear();
+
+        // 1. 处理完成的任务
         for (auto& [gid, npu] : npu_map) {
             bool has_finished_tasks_this_tick = false;
             auto it = npu.running_tasks.begin();
@@ -219,12 +216,14 @@ void Simulator::run() {
             }
             if (has_finished_tasks_this_tick) npus_to_re_evaluate.insert(gid);
         }
+
+        // 2. 处理事件
         if (events.count(current_time)) {
             for (const auto& [type, payload] : events.at(current_time)) {
                 if (type == EventType::SEND) {
                     User& user = users.at(payload.user_id);
                     if (payload.send_time < user.next_allowed_send_time) fail_with_error("Invalid User Send Time (Runtime Check)", "User " + std::to_string(user.id) + " violation at t=" + std::to_string(payload.send_time));
-                    user.next_allowed_send_time = payload.arrival_time + 1;
+                    user.next_allowed_send_time = payload.arrival_time + 1; // 此处修改的是真实状态，是正确的
                     const auto& server = servers[payload.server_id - 1];
                     int npu_global_id = server.npu_global_ids[payload.npu_id - 1];
                     if (user.last_npu_global_id != -1 && user.last_npu_global_id != npu_global_id) user.migrations++;
@@ -239,6 +238,8 @@ void Simulator::run() {
             }
             events.erase(current_time);
         }
+
+        // 3. 检查并启动新任务
         for (int gid : npus_to_re_evaluate) {
             auto& npu = npu_map.at(gid);
             std::sort(npu.queue.begin(), npu.queue.end(), [](const Request& a, const Request& b){ if (a.arrival_time != b.arrival_time) return a.arrival_time < b.arrival_time; return a.user_id < b.user_id; });
@@ -255,27 +256,30 @@ void Simulator::run() {
                 } else ++it;
             }
         }
-        
-        // 【修改2】分别记录两种日志
-        for (const auto& gid : npus_to_re_evaluate) {
-            const auto& npu = npu_map.at(gid);
+
+        // 4. 记录日志
+        for (auto& gid: npus_to_re_evaluate) {
+            auto& npu = npu_map[gid];
             memory_log.push_back({current_time, gid, npu.server_id, npu.local_id, npu.used_memory, npu.memory_limit});
-            queue_log.push_back({current_time, gid, npu.server_id, npu.local_id, static_cast<int>(npu.queue.size())});
         }
         
+        // 更新进度条
         int percent = (total_samples_to_process > 0) ? static_cast<int>(100.0 * processed_samples / total_samples_to_process) : 100;
         if (percent > last_percent) {
             last_percent = percent;
-            std::cout << "[";
             int pos = BAR_WIDTH * percent / 100;
+            std::cout << "[";
             for (int i = 0; i < BAR_WIDTH; ++i) {
-                if (i < pos) std::cout << "="; else if (i == pos) std::cout << ">"; else std::cout << " ";
+                if (i < pos) std::cout << "=";
+                else if (i == pos) std::cout << ">";
+                else std::cout << " ";
             }
             std::cout << "] " << percent << "% | Time: " << current_time << "ms\r";
             std::cout.flush();
         }
         current_time++;
     }
+    // std::cout << npu_map.size() << std::endl;
     std::cout << std::endl;
     std::cout << "Simulation Finished at time: " << current_time - 1 << " ms." << std::endl;
 }
@@ -308,12 +312,10 @@ void Simulator::calculate_score() {
     std::cout << "-------------------------" << std::endl;
 }
 
-
-// 【修改3】拆分并更新保存函数
 void Simulator::save_memory_log(const std::string& filepath) {
     std::cout << "--- 5. Saving Memory Log ---" << std::endl;
     if (memory_log.empty()) {
-        std::cout << "No memory log data was recorded." << std::endl;
+        std::cout << "No memory usage data was recorded." << std::endl;
         return;
     }
     std::ofstream file(filepath);
@@ -324,37 +326,9 @@ void Simulator::save_memory_log(const std::string& filepath) {
     file << std::left << std::setw(10) << "Time" << std::setw(15) << "NPU_Global_ID" << std::setw(12) << "Server_ID" << std::setw(14) << "NPU_Local_ID" << std::setw(15) << "Used_Memory" << "Max_Memory" << "\n";
     file << std::string(80, '-') << "\n";
     for (const auto& entry : memory_log) {
-        // 只记录关键点即可，不再需要判断值是否大于0
-        file << std::left << std::setw(10) << entry.time << std::setw(15) << entry.npu_global_id << std::setw(12) << entry.server_id << std::setw(14) << entry.npu_local_id << std::setw(15) << entry.used_memory << entry.max_memory << "\n";
+        if (entry.used_memory >= 0) {
+            file << std::left << std::setw(10) << entry.time << std::setw(15) << entry.npu_global_id << std::setw(12) << entry.server_id << std::setw(14) << entry.npu_local_id << std::setw(15) << entry.used_memory << entry.max_memory << "\n";
+        }
     }
     std::cout << "Memory log successfully saved to '" << filepath << "'" << std::endl;
-}
-
-void Simulator::save_queue_log(const std::string& filepath) {
-    std::cout << "--- 6. Saving Queue Log ---" << std::endl;
-    if (queue_log.empty()) {
-        std::cout << "No queue log data was recorded." << std::endl;
-        return;
-    }
-    std::ofstream file(filepath);
-    if (!file.is_open()) {
-        std::cerr << "Error saving queue log to '" << filepath << "'" << std::endl;
-        return;
-    }
-    file << std::left 
-         << std::setw(10) << "Time" 
-         << std::setw(15) << "NPU_Global_ID" 
-         << std::setw(12) << "Server_ID" 
-         << std::setw(14) << "NPU_Local_ID" 
-         << "Queue_Size" << "\n";
-    file << std::string(55, '-') << "\n";
-    for (const auto& entry : queue_log) {
-        file << std::left 
-             << std::setw(10) << entry.time 
-             << std::setw(15) << entry.npu_global_id 
-             << std::setw(12) << entry.server_id 
-             << std::setw(14) << entry.npu_local_id 
-             << entry.queue_size << "\n";
-    }
-    std::cout << "Queue log successfully saved to '" << filepath << "'" << std::endl;
 }

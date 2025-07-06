@@ -1,1 +1,1 @@
-D:/miniconda3/envs/TCAD/python.exe replay_game.py --file memory_log.txt
+D:/miniconda3/envs/TCAD/python.exe replay_game.py --mem-file memory_log.txt --queue-file queue_log.txt

@@ -1,15 +1,10 @@
 #include <bits/stdc++.h>
 
-
-
 #define READY 2
 #define COMPLETED 1
 #define MAX_SEND_COUNT 300
 // #define ceil(x,y) ((x + y - 1) / y)
 
-
-
-using namespace std::chrono;
 
 using arr2 = std::array<int, 2>;
 using arr3 = std::array<int, 3>;
@@ -162,77 +157,33 @@ public:
         }
 
         for (int arriveTime = 0; arriveTime <= maxTime; arriveTime ++) {
-            int freeMemory = totalMemory - memeoryUsage[arriveTime];
-            int freeBatchSize = calculateBatchSize(freeMemory);
-            if (freeBatchSize <= 1) continue;
-
             while (!waitingUsers.empty() and waitingUsers.top()[0] <= arriveTime) {
                 arr2 tp = waitingUsers.top();
                 waitingUsers.pop();
                 int userId = tp[1];
-                availableUsers.push({users[userId].remainCount * users[userId].endTime, userId});
+                availableUsers.push({users[userId].prior, userId});
             }
 
             while(!availableUsers.empty()) {
-                int freeMemory = totalMemory - memeoryUsage[arriveTime];
-                int freeBatchSize = calculateBatchSize(freeMemory);
-                if (freeBatchSize <= 1) break;
-
                 int userId = availableUsers.top()[1];
                 availableUsers.pop();
-                int batchSize = std::min(maxBatchSize, userRemainCount[userId]);
-                int handleTime = calculateInferenceTime(batchSize);
-                int endTime = arriveTime + handleTime;
-                int cnt = userRemainCount[userId] / blockSize;
-                int res = userRemainCount[userId] - cnt * blockSize;
-                int resTime = calculateInferenceTime(res);
-                int processTime = std::max(blockTime, latency[serverId][userId]) * cnt + resTime;
-
-                
-                bool f1 = maxSmallBlockCount[userId] > 0;
-                bool f2 = (arriveTime + 2 * processTime) <= users[userId].endTime;
-                bool f3 = (arriveTime + calculateInferenceTime(std::min(blockSize, userRemainCount[userId]))) <= users[userId].endTime;
-                bool f4 = availableUsers.size() >= 4;
-                bool f5 = userRemainCount[userId] <= blockSize;
-                bool f6 = (freeBatchSize < maxBatchSize and freeBatchSize >= blockSize); // 当前剩余一个小块
-                if ((f1 and f2 and f3)) {
-                    // 基本条件为有小块余量，并且不超时
-                    if (f6 or (!f6 and f4) or f5) {
-                        // 此时发送一个小块
-                        batchSize = std::min(blockSize, userRemainCount[userId]);
-                        int handleTime = calculateInferenceTime(batchSize);
-                        endTime = arriveTime + blockTime;
-                        maxSmallBlockCount[userId] -= 1;
-                    }
-                } 
-
-                // 此时空闲一个小块，但是不满足发送小块的条件
-                if ((freeBatchSize <= blockSize) and (batchSize > blockSize)) {
-                    waitingUsers.push({arriveTime, userId});
-                    continue;
+                if (maxSmallBlockCount[userId] > 0) {
+                    int batchSize = std::min(blockSize, userRemainCount[userId]);
+                    int sendTime = arriveTime - latency[serverId][userId];
+                    ans[userId].push_back({sendTime, serverId, npuId, batchSize});
+                    userRemainCount[userId] -= batchSize;
+                    maxSmallBlockCount[userId] --;
+                } else {
+                    int batchSize = std::min(maxBatchSize, userRemainCount[userId]);
+                    int sendTime = arriveTime - latency[serverId][userId];
+                    ans[userId].push_back({sendTime, serverId, npuId, batchSize});
+                    userRemainCount[userId] -= batchSize;
                 }
-
-                int sendTime = arriveTime - latency[serverId][userId];
-                ans[userId].push_back({sendTime, serverId, npuId, batchSize});
-                userRemainCount[userId] -= batchSize;
-                
 
                 if (userRemainCount[userId] > 0) {
                     waitingUsers.push({arriveTime + latency[serverId][userId] + 1, userId});
-                } else {
-                    
-                    if (arriveTime + handleTime <= users[userId].endTime) {
-                        completedUsers.push_back(userId);
-                        userRemainCount.erase(userId);
-                    }
                 }
-                
-                if (batchSize <= blockSize) batchSize = blockSize;
-                else batchSize = maxBatchSize;
 
-                for (int t = arriveTime; t < endTime; t ++) {
-                    memeoryUsage[t] += (batchSize * A + B);
-                }
             }
 
         }
@@ -329,47 +280,10 @@ void solve() {
         }
     }
 
-    simulators[1][1].stimulateUsers = simulators[1][1].completedUsers;
-    simulators[1][1].stimulate();
-    std::clog << "again: " << simulators[1][1].timeoutUsers.size() << std::endl;
-    std::clog << "before iter, timeout count: " << timeoutUsers.size() << std::endl;
-    for (int userId: timeoutUsers) {
-        // std::clog << "try " << userId << std::endl;
-        bool assignSuccess = false;
-        for (int i = 1; i <= N; i ++) {
-            if (assignSuccess) continue;
-            for (int j = 1; j <(int)npus[i].size(); j ++) {
-                std::vector<int> originCompletedUsers = simulators[i][j].completedUsers;
-                simulators[i][j].stimulateUsers = simulators[i][j].completedUsers;
-                simulators[i][j].stimulateUsers.push_back(userId);
-                // std::clog << "again: " << simulators[1][1].stimulateUsers.size() << std::endl;
-                simulators[i][j].stimulate();
-                // std::clog << "again: " << simulators[1][1].completedUsers.size() << std::endl;
-                // std::clog << "again: " << simulators[1][1].timeoutUsers.size() << std::endl;
-                if ((int)simulators[i][j].timeoutUsers.size() == 0) {
-                    // std::clog << userId << " iter success!" << std::endl;
-                    // std::clog << "serverId, npuId: " << i << " " << j << std::endl;
-                    // std::clog << "completed count: " << simulators[i][j].completedUsers.size() << std::endl;
-                    assignSuccess = true;
-                } else {
-                    // std::clog << "recover! " << originCompletedUsers.size() << std::endl;
-                    simulators[i][j].stimulateUsers = originCompletedUsers;
-                    // simulators[i][j].stimulate();
-                    // std::clog << "recover over!" << std::endl;
-                }
-            }
-        }
-    }
-    
-    timeoutUsers.clear();
 
     for (int i = 1; i <= N; i ++) {
         for (int j = 1; j <(int)npus[i].size(); j ++) {
-            std::vector<int> &ti = simulators[i][j].timeoutUsers;
-            timeoutUsers.insert(timeoutUsers.end(), ti.begin(), ti.end());
-
             for (auto&k : simulators[i][j].completedUsers) {
-                users[k].remainCount = simulators[i][j].userRemainCount[k];
                 ans[k].insert(ans[k].end(), simulators[i][j].ans[k].begin(), simulators[i][j].ans[k].end());
             }
 
@@ -379,12 +293,10 @@ void solve() {
             }
         }
     }
-    
-
+   
     std::clog << "timeout count: " << timeoutUsers.size() << std::endl;
     
-
-    for (int i = 1; i <= M; i ++) {
+    for (auto &i: timeoutUsers) {
         int startTime = 6e4 + 21;
         while (users[i].remainCount > 0) {
             int batchSize = std::min(users[i].remainCount, npus[1][1].maxBatchSize);
@@ -413,10 +325,6 @@ void solve() {
 
 int main() {
     // std::ios::sync_with_stdio(false); std::cin.tie(0); std::clog.tie(0);
-    auto start_time = high_resolution_clock::now();
     solve();
-    auto end_time = high_resolution_clock::now();
-    auto duration = duration_cast<milliseconds>(end_time - start_time);
-    std::cerr << "execution time: " << duration.count() << "ms." << std::endl;
     return 0;
 }

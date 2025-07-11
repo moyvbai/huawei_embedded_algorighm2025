@@ -1,422 +1,520 @@
 #include <bits/stdc++.h>
 
-
-
-#define READY 2
-#define COMPLETED 1
-#define MAX_SEND_COUNT 300
-// #define ceil(x,y) ((x + y - 1) / y)
-
-
-
-using namespace std::chrono;
-
 using arr2 = std::array<int, 2>;
 using arr3 = std::array<int, 3>;
 using arr4 = std::array<int, 4>;
 
+// ===================================================================
+// START: Logger System
+// ===================================================================
+#define DEBUG
+#ifdef DEBUG
+    #define LOG(...) do { \
+        fprintf(stderr, "[DEBUG] "); \
+        fprintf(stderr, __VA_ARGS__); \
+        fprintf(stderr, "\n"); \
+    } while(0)
+#else
+    #define LOG(...) do {} while(0)
+#endif
+// ===================================================================
+// END: Logger System
+// ===================================================================
 
-// 计数从1开始
-int N;  // 服务器数量
-int M; // 用户数量
-int A, B, G; // 显存与batchsize之间的关系，Mem = a * bs + b
 
+// ===================================================================
+// START: Data Structures & Classes
+// ===================================================================
 
-class User {
-public:
-    int id; // 用户id
-    int startTime; // 请求开始时间
-    int endTime; // 请求结束时间
-    int requestCount; // 请求数量
-    int remainCount; // 剩余的未完成的请求数量
-
-    int prior; // 用户的优先级
-    User(){};
-    User(int id, int startTime, int endTime, int requestCount) {
-        this->id = id;
-        this->startTime = startTime;
-        this->endTime = endTime;
-        this->requestCount = requestCount;
-        this->remainCount = requestCount;
-        this->prior = this->endTime;
-    }
-};
-std::vector<User> users;
-std::vector<std::vector<int> > latency; // 用户将请求发送到服务器上的时延
-
-class NPU {
-public:
-    int serverId; // 所属的服务器id
-    int id; // 编号
-    int totalMemory; // 显存容量（单位：GB）
-    int maxBatchSize; // 最大的batch size
-    int freeBatchSize;  // 剩余显存（单位：GB）
-    int inferenceSpeed; // 推理速度（单位：推理/秒）
-    int inferenceAbility; // 推理能力， sqrt(bc) * k;
-    int finishTime; // 请求完成时间，默认为0
-
+struct NPU {
+    int server_id;
+    int npu_id;
+    int k;
+    int memory;
 
     int calculateInferenceTime (int batchSize) {
-        return ceil(sqrtl(batchSize) / inferenceSpeed);
+        return ceil(sqrtl(batchSize) / k);
     }
-
-    
-    NPU(){};
-    NPU(int serverId, int id, int totalMemory, int inferenceSpeed) {
-        this->serverId = serverId;
-        this->id = id;
-        this->totalMemory = totalMemory;
-        this->inferenceSpeed = inferenceSpeed;
-    } 
-
-    void init() {
-        this->maxBatchSize = (totalMemory - B) / A;
-        this->freeBatchSize = this->maxBatchSize;
-        this->inferenceAbility = sqrtl(this->maxBatchSize) * inferenceSpeed;
-        this->finishTime = 0;
-    }
-    
 };
-std::vector<std::vector<NPU> > npus(11); // 最多11个服务器
 
+struct User {
+    int id;
+    int s;
+    int e;
+    int cnt;
+};
 
-class Simulator {
+struct Schedule {
+    int time;
+    int server_id;
+    int npu_id;
+    int batch_size;
+};
+
+class ProblemData {
 public:
-    int serverId; // 服务器Id
-    int npuId; // npu的Id
-    int maxTime; // 模拟的最大时刻
-    int totalMemory; // 显存容量（单位：GB
-    int maxBatchSize;
-    int inferenceSpeed; // 推理速度（单位：推理/秒）
-    int finishTime;     // 最后的结束时间
-    std::vector<int> stimulateUsers;
-    std::vector<int> sumMemory; // 显存占用的前缀和
-    std::vector<int> completedUsers;
-    std::vector<int> timeoutUsers;
-    std::vector<int> memeoryUsage;
-    std::vector<int> remainSendCount;
-    std::unordered_map<int, int> userRemainCount;
-    std::vector<std::vector<std::array<int, 4> > > ans;
+    int n_servers;
+    int m_users;
+    std::vector<std::vector<NPU>> npus; 
+    std::vector<User> users;
+    std::vector<std::vector<int>> latency;
+    int mem_a, mem_b;
 
+    void read(std::istream& in) {
+        in >> n_servers;
+        npus.resize(n_servers + 1);
+        for (int i = 1; i <= n_servers; ++i) { 
+            int g, k, m; 
+            in >> g >> k >> m;
+            npus[i].resize(g + 1);
+            for (int j = 1; j <= g; j++) {
+                npus[i][j].server_id = i;
+                npus[i][j].npu_id = j;
+                npus[i][j].k = k;
+                npus[i][j].memory = m;
+            }
+        }
 
-    Simulator(){};    
-    Simulator(int serverId, int npuId, int totalMemory, int inferenceSpeed, int maxTime = 6e4) {
-        this->serverId = serverId;
-        this->npuId = npuId;
-        this->totalMemory = totalMemory;
-        this->inferenceSpeed = inferenceSpeed;
-        this->maxTime = maxTime;
-        this->maxBatchSize = (totalMemory - B) / A;
-        init();
+        in >> m_users;
+        users.resize(m_users + 1);
+        for (int i = 1; i <= m_users; ++i) { 
+            users[i].id = i; 
+            in >> users[i].s >> users[i].e >> users[i].cnt; 
+        }
+
+        latency.assign(n_servers + 1, std::vector<int>(m_users + 1));
+        for (int i = 1; i <= n_servers; ++i) { 
+            for (int j = 1; j <= m_users; ++j) { 
+                in >> latency[i][j]; 
+            } 
+        }
+        in >> mem_a >> mem_b;
     }
+};
 
-    void init() {
-        finishTime = 0;
-        userRemainCount.clear();
-        sumMemory = std::vector<int>(maxTime + 100, 0);
-        completedUsers.clear();
-        timeoutUsers.clear();
-        memeoryUsage = std::vector<int>(maxTime + 100, 0);
-        ans = std::vector<std::vector<std::array<int, 4> > >(M + 1);
+struct SolverResult {
+    std::vector<std::vector<Schedule> > solution;
+    int completed_user_count = 0; 
+};
+
+class Solver {
+public:
+    virtual std::string name() const = 0;
+    virtual SolverResult solve(ProblemData& data) = 0;
+    virtual ~Solver() = default;
+
+    static void print_solution(const std::vector<std::vector<Schedule>>& solution, int m_users) {
+        if (solution.empty() || solution.size() <= 1) return;
+        for (int i = 1; i <= m_users; ++i) {
+            const auto& user_schedule = solution[i];
+            if (user_schedule.empty()) {
+                std::cout << 0 << "\n\n";
+                continue;
+            }
+            std::cout << user_schedule.size() << "\n";
+            for (size_t j = 0; j < user_schedule.size(); ++j) {
+                const auto& sch = user_schedule[j];
+                std::cout << sch.time << " " << sch.server_id << " " << sch.npu_id << " " << sch.batch_size << (j == user_schedule.size() - 1 ? "" : " ");
+            }
+            std::cout << "\n";
+        }
     }
+};
 
-    int calculateInferenceTime (int batchSize) {
-        return ceil(sqrtl(batchSize) / inferenceSpeed);
-    }
+struct NpuSimulationResult {
+    std::map<int, std::vector<Schedule>> schedules; 
+    std::vector<int> completed_users;
+    std::vector<int> timeout_users;
+    std::map<int, int> remaining_samples;
+    std::vector<int> memory_usage; 
+};
 
-    int calculateBatchSize(int memory) {
-        return std::max((memory - B) / A, 0);
-    }
 
-    void stimulate() {
-        init();
+// ===================================================================
+// START: Solver Implementations
+// ===================================================================
 
-        int blockSize = (totalMemory / 2 - B) / A;
-        int blockTime = calculateInferenceTime(blockSize);
+class SimpleSolver : public Solver {
+public:
+    std::string name() const override { return "SimpleSolver (Fixed Target)"; }
+    SolverResult solve(ProblemData& data) override {
+        LOG("Running %s...", name().c_str());
+        SolverResult result;
+        result.solution.resize(data.m_users + 1);
+
+        // 目标固定为服务器1, NPU 1
+        const int TARGET_SERVER_ID = 1;
+        const int TARGET_NPU_ID = 1;
         
-        std::vector<int> maxSmallBlockCount(M + 1, 0);
+        if (data.n_servers < TARGET_SERVER_ID || data.npus[TARGET_SERVER_ID].size() <= TARGET_NPU_ID) {
+            LOG("Error: Target NPU (1,1) does not exist.");
+            return result;
+        }
+        const auto& target_npu = data.npus[TARGET_SERVER_ID][TARGET_NPU_ID];
+
+        // 计算最大批次大小
+        int max_bs = (target_npu.memory - data.mem_b) / data.mem_a;
+        max_bs = std::min(max_bs, 1000);
+        if (max_bs <= 0) max_bs = 1;
+
+        // 为每个用户独立生成调度方案
+        for (int user_id = 1; user_id <= data.m_users; ++user_id) {
+            const auto& user = data.users[user_id];
+            std::vector<Schedule> user_schedules;
+            int remaining_samples = user.cnt;
+            int user_can_send_time = user.s;
+
+            // “能发就发”逻辑
+            while(remaining_samples > 0) {
+                int batch_size = std::min(remaining_samples, max_bs);
+                int send_time = user_can_send_time;
+                
+                user_schedules.push_back({send_time, TARGET_SERVER_ID, TARGET_NPU_ID, batch_size});
+                
+                // 更新该用户下一个可发送时间
+                int latency = data.latency[TARGET_SERVER_ID][user_id];
+                int arrival_time = send_time + latency;
+                user_can_send_time = arrival_time + 1;
+
+                remaining_samples -= batch_size;
+            }
+            result.solution[user_id] = user_schedules;
+        }
+        result.completed_user_count = 1;
+
+        return result;
+    }
+};
+
+
+class TwoBlockSolver : public Solver {
+public:
+    std::string name() const override { return "TwoBlockSolver"; }
+    
+    NpuSimulationResult simulate(NPU& npu, ProblemData& data, const std::vector<int>& simulate_users) {
+        LOG("runing simluate ...");
+        int M = data.m_users, N = data.n_servers, A = data.mem_a, B = data.mem_b;
+        int max_time = 6e4, server_id = npu.server_id, npu_id = npu.npu_id;
+        int max_batch_size = (npu.memory - B) / A, memory = npu.memory;
+        std::vector<User>& users = data.users;
+        std::vector<std::vector<int>>& latency = data.latency;
+
+        NpuSimulationResult result;
+        std::map<int, std::vector<Schedule>>& schedules = result.schedules; 
+        std::vector<int>& completed_users = result.completed_users;
+        std::vector<int>& timeout_users = result.timeout_users;
+        std::map<int, int>& remaining_samples = result.remaining_samples;
+        std::vector<int>& memory_usage = result.memory_usage; 
+        memory_usage.resize(max_time + 100, 0);
+        
+        for (auto& user_id: simulate_users) {
+            remaining_samples[user_id] = data.users[user_id].cnt;
+        }
+
+        int block_size = (npu.memory / 2 - B) / A;
+        int blockTime = npu.calculateInferenceTime(block_size);
+
+        std::vector<int> max_small_block_count(M + 1, 0);
 
         // 提前划分好块
-        for (int userId: stimulateUsers) {
-            userRemainCount[userId] = users[userId].remainCount;
-            int mx = ceil(1.0 * userRemainCount[userId] / blockSize);
+        for (int userId: simulate_users) {
+            int mx = ceil(1.0 * remaining_samples[userId] / block_size);
             for (int i = mx; i >= 0; i --) {
-                int j = (userRemainCount[userId] - i * blockSize) / maxBatchSize;
-                int res = userRemainCount[userId] - j * maxBatchSize - i * blockSize;
+                int j = (remaining_samples[userId] - i * block_size) / max_batch_size;
+                int res = remaining_samples[userId] - j * max_batch_size - i * block_size;
                 if (res > 0) j += 1;
                 if (i + j > 300) continue;
                 else {
-                    maxSmallBlockCount[userId] = i;
+                    max_small_block_count[userId] = i;
                     break;
                 }
             }
         }
 
-        std::priority_queue<arr2, std::vector<arr2>, std::greater<arr2> > waitingUsers; 
-        // 按照(请求到达时间, userId)的格式排序，
-        std::priority_queue<arr2, std::vector<arr2>, std::greater<arr2> > availableUsers; 
-        // 按照(prior, userId)的格式存储
 
-        for (int userId: stimulateUsers) {
-            waitingUsers.push({users[userId].startTime + latency[serverId][userId], userId});
+        // --- 3. 时间步进模拟 ---
+        // first: 到达时间, second: 用户ID
+        std::priority_queue<arr2, std::vector<arr2>, std::greater<arr2>> waiting_users; 
+        // first: 优先级 (此处用剩余样本数作为简单优先级), second: 用户ID
+        std::priority_queue<arr2, std::vector<arr2>, std::greater<arr2>> available_users; 
+
+        for (int user_id: simulate_users) {
+            waiting_users.push({data.users[user_id].s + data.latency[server_id][user_id], user_id});
         }
 
-        for (int arriveTime = 0; arriveTime <= maxTime; arriveTime ++) {
-            int freeMemory = totalMemory - memeoryUsage[arriveTime];
-            int freeBatchSize = calculateBatchSize(freeMemory);
-            if (freeBatchSize <= 1) continue;
-
-            while (!waitingUsers.empty() and waitingUsers.top()[0] <= arriveTime) {
-                arr2 tp = waitingUsers.top();
-                waitingUsers.pop();
-                int userId = tp[1];
-                availableUsers.push({users[userId].remainCount * users[userId].endTime, userId});
+        for (int current_time = 0; current_time <= max_time; current_time++) {
+            // 将到达的用户放入可用队列
+            while (!waiting_users.empty() && waiting_users.top()[0] <= current_time) {
+                int user_id = waiting_users.top()[1];
+                waiting_users.pop();
+                available_users.push({ users[user_id].e, user_id}); // 使用初始样本数作为优先级
             }
 
-            while(!availableUsers.empty()) {
-                int freeMemory = totalMemory - memeoryUsage[arriveTime];
-                int freeBatchSize = calculateBatchSize(freeMemory);
-                if (freeBatchSize <= 1) break;
+            while(!available_users.empty()) {
+                int free_memory = memory - memory_usage[current_time];
+                int free_batch_size = (free_memory - B) / A;
+                if (free_batch_size <= 1) break;
 
-                int userId = availableUsers.top()[1];
-                availableUsers.pop();
-                int batchSize = std::min(maxBatchSize, userRemainCount[userId]);
-                int handleTime = calculateInferenceTime(batchSize);
-                int endTime = arriveTime + handleTime;
-                int cnt = userRemainCount[userId] / blockSize;
-                int res = userRemainCount[userId] - cnt * blockSize;
-                int resTime = calculateInferenceTime(res);
-                int processTime = std::max(blockTime, latency[serverId][userId]) * cnt + resTime;
+                int user_id = available_users.top()[1];
+                available_users.pop();
 
+                // 默认发送最大批次
+                int batch_size = std::min(max_batch_size, remaining_samples[user_id]);
+
+                // --- 启发式决策：是否改为发送小块 ---
+                int small_block_time_cost = npu.calculateInferenceTime(block_size);
+                int small_block_count = remaining_samples[user_id] / block_size;
+                int remaing_block = remaining_samples[user_id] - small_block_count * block_size;
+                int remaing_block_time_cost = npu.calculateInferenceTime(remaing_block);
+                int estimated_total_time_cost = std::max(small_block_time_cost, data.latency[server_id][user_id]) * small_block_count;
+                if (remaing_block > 0) estimated_total_time_cost += remaing_block_time_cost;
+
+                bool has_small_block_quota = max_small_block_count[user_id] > 0;
+                bool small_block_is_safe = (current_time + 2 * estimated_total_time_cost) <= data.users[user_id].e;
+                bool can_send_small_now = (current_time + npu.calculateInferenceTime(std::min(block_size, remaining_samples[user_id]))) <= data.users[user_id].e;
                 
-                bool f1 = maxSmallBlockCount[userId] > 0;
-                bool f2 = (arriveTime + 2 * processTime) <= users[userId].endTime;
-                bool f3 = (arriveTime + calculateInferenceTime(std::min(blockSize, userRemainCount[userId]))) <= users[userId].endTime;
-                bool f4 = availableUsers.size() >= 4;
-                bool f5 = userRemainCount[userId] <= blockSize;
-                bool f6 = (freeBatchSize < maxBatchSize and freeBatchSize >= blockSize); // 当前剩余一个小块
-                if ((f1 and f2 and f3)) {
-                    // 基本条件为有小块余量，并且不超时
-                    if (f6 or (!f6 and f4) or f5) {
-                        // 此时发送一个小块
-                        batchSize = std::min(blockSize, userRemainCount[userId]);
-                        int handleTime = calculateInferenceTime(batchSize);
-                        endTime = arriveTime + blockTime;
-                        maxSmallBlockCount[userId] -= 1;
-                    }
-                } 
-
-                // 此时空闲一个小块，但是不满足发送小块的条件
-                if ((freeBatchSize <= blockSize) and (batchSize > blockSize)) {
-                    waitingUsers.push({arriveTime, userId});
-                    continue;
-                }
-
-                int sendTime = arriveTime - latency[serverId][userId];
-                ans[userId].push_back({sendTime, serverId, npuId, batchSize});
-                userRemainCount[userId] -= batchSize;
-                
-
-                if (userRemainCount[userId] > 0) {
-                    waitingUsers.push({arriveTime + latency[serverId][userId] + 1, userId});
-                } else {
+                bool should_send_small_block = false;
+                if (has_small_block_quota && small_block_is_safe && can_send_small_now) {
+                    bool is_last_block = remaining_samples[user_id] <= block_size;
+                    bool has_enough_free_memory_for_small = free_batch_size >= block_size;
+                    bool has_enough_free_memory_for_big = free_batch_size >= max_batch_size;
+                    bool other_users_waiting = available_users.size() >= 2;
                     
-                    if (arriveTime + handleTime <= users[userId].endTime) {
-                        completedUsers.push_back(userId);
-                        userRemainCount.erase(userId);
+
+                    if (has_enough_free_memory_for_small && (other_users_waiting || (!has_enough_free_memory_for_big))) {
+                        should_send_small_block = true;
                     }
                 }
                 
-                if (batchSize <= blockSize) batchSize = blockSize;
-                else batchSize = maxBatchSize;
+                if (should_send_small_block) {
+                    batch_size = std::min(block_size, remaining_samples[user_id]);
+                    max_small_block_count[user_id]--;
+                }
 
-                for (int t = arriveTime; t < endTime; t ++) {
-                    memeoryUsage[t] += (batchSize * A + B);
+
+                int handle_time = npu.calculateInferenceTime(batch_size);
+                int end_time = current_time + handle_time;
+                // 如果当前空闲内存不足以发送大块，但本来计划发送大块，则等待
+                if (batch_size > free_batch_size or end_time > max_time) {
+                    waiting_users.push({current_time, user_id}); // 放回队列等待
+                    continue; // 当前tick无法再分配，检查下一个tick
+                }
+
+                
+                int send_time = current_time - data.latency[server_id][user_id];
+                schedules[user_id].push_back({send_time, server_id, npu_id, batch_size});
+                remaining_samples[user_id] -= batch_size;
+
+                // 占用内存
+                if (batch_size <= block_size) batch_size = block_size;
+                else batch_size = max_batch_size;
+                
+                int memory_to_occupy = A * batch_size + B;
+                for (int t = current_time; t < current_time + npu.calculateInferenceTime(batch_size); t++) {
+                    memory_usage[t] += memory_to_occupy;
+                }
+
+                // 检查用户是否还有后续请求
+                if (remaining_samples[user_id] <= 0) {
+                    if (current_time + handle_time <= users[user_id].e) {
+                        completed_users.push_back(user_id);
+                        remaining_samples.erase(user_id);
+                    }
+                } else {
+                    waiting_users.push({current_time + data.latency[server_id][user_id] + 1, user_id}); // 简化：下一个tick即可再次请求
                 }
             }
-
         }
 
-
-        for(auto it = userRemainCount.begin(); it != userRemainCount.end(); it ++) {
-            timeoutUsers.push_back(it->first);
-        }
-
-
-        // 计算显存的累积和
-        for(int i = 1; i <= maxTime; i ++) {
-            sumMemory[i] = sumMemory[i - 1] + memeoryUsage[i];
+        // --- 4. 最终统计 ---
+        for(auto& v : remaining_samples) {
+            timeout_users.push_back(v.first);
         }
         
+        return result;
     }
+    
+    SolverResult solve(ProblemData& data) override {
+        LOG("Running %s...", name().c_str());
+        
+        std::vector<User>& users = data.users;
+        std::vector<std::vector<NPU> >& npus = data.npus;
+        int M = data.m_users, N = data.n_servers, A = data.mem_a, B = data.mem_b;
+        
+        SolverResult result;
+        result.solution.resize(data.m_users + 1);
+        
+        std::vector<int> user_order;
+        for(int i = 1; i <= data.m_users; i ++) {
+            user_order.push_back(i);
+        }
 
-    int queryFreeMemory(int l, int r) {
-        return maxBatchSize * (r - l) - (sumMemory[r - l] - sumMemory[l - 1]);
+        std::sort(user_order.begin(), user_order.end(), [&](int u1, int u2) {
+            return data.users[u1].cnt < data.users[u2].cnt;
+        });
+
+        
+        std::vector<std::vector<std::vector<int> > > simulate_users(data.n_servers + 1);
+        std::vector<std::vector<NpuSimulationResult> > simulate_result(data.n_servers + 1);
+        for (int i = 1; i <= data.n_servers; i ++) {
+            simulate_users[i].resize(data.npus[i].size());
+            simulate_result[i].resize(data.npus[i].size());
+        }
+
+
+        int server_id = 1, npu_id = 1;
+        for (auto& user_id: user_order) {
+            simulate_users[server_id][npu_id].push_back(user_id);
+
+            npu_id += 1;
+            if (npu_id >= (int)data.npus[server_id].size()) {
+                server_id += 1;
+                npu_id = 1;
+                if (server_id > data.n_servers) {
+                    server_id = 1;
+                }
+            }
+        }
+
+        std::set<int> completed_users;
+        LOG("prepare simulate!");
+        LOG("user count: %d", simulate_users[1][1].size());
+        LOG("%d", data.npus[1].size());
+        for (int i = 1; i <= data.n_servers; i ++) {
+            for (int j = 1; j < (int)data.npus[i].size(); j ++) {
+                simulate_result[i][j] = simulate(npus[i][j], data, simulate_users[i][j]);                
+                while ((int)simulate_result[i][j].timeout_users.size() != 0) {
+                    simulate_users[i][j] = simulate_result[i][j].completed_users;
+                    simulate_result[i][j] = simulate(npus[i][j], data, simulate_users[i][j]);
+                }
+
+                for (auto& user_id: simulate_result[i][j].completed_users) {
+                    completed_users.insert(user_id);
+                }
+            }
+        }
+
+        std::vector<int> timeout_users;
+        for (int i = 1; i <= data.m_users; i ++) {
+            if (completed_users.count(i) == 0) {
+                timeout_users.push_back(i);
+            }
+        }
+
+        std::sort(timeout_users.begin(), timeout_users.end(), [&](int u1, int u2) {
+            return users[u1].cnt < users[u2].cnt;
+        });
+
+
+        LOG("before iter, timeout users count: %d", (int)timeout_users.size());
+        for (auto& user_id: timeout_users) {
+            bool assign_success = false;
+            for (int i = 1; i <= data.n_servers; i ++) {
+                if (assign_success) break;
+                for (int j = 1; j < data.npus[i].size(); j ++) {
+                    if (assign_success) break;
+                    std::vector<int> new_simulate_users = simulate_users[i][j];
+                    new_simulate_users.push_back(user_id);
+                    NpuSimulationResult res = simulate(npus[i][j], data, new_simulate_users);
+                    if (res.completed_users.size() > simulate_result[i][j].completed_users.size()) {
+                        simulate_users[i][j] = new_simulate_users;
+                        simulate_result[i][j] = res;
+                        assign_success = true;
+                        LOG("user %d iter success, current completed count: %d", user_id, res.completed_users.size());
+                    }
+                }
+            }
+        }
+        
+        std::vector<int> remaing_sample(data.m_users + 1, 0);
+        for (int i = 1; i <= data.m_users; i ++) remaing_sample[i] = users[i].cnt;
+        for (int i = 1; i <= data.n_servers; i ++) {
+            for (int j = 1; j < data.npus[i].size(); j ++) {
+                for (auto& user_id: simulate_users[i][j]) {
+                    remaing_sample[user_id] = simulate_result[i][j].remaining_samples[user_id];
+                    result.solution[user_id].insert(result.solution[user_id].end(), 
+                        simulate_result[i][j].schedules[user_id].begin(), simulate_result[i][j].schedules[user_id].end());
+                }
+            }
+        }
+
+        LOG("handle timeout user!");
+        for (int i = 1; i <= data.m_users; i ++) {
+            if (remaing_sample[i] == 0) result.completed_user_count += 1;
+            int start_time = 6e4 + 21;
+            while (remaing_sample[i] > 0) {
+                int batch_size = std::min(remaing_sample[i], ((npus[1][1].memory - B) / A));
+                remaing_sample[i] -= batch_size;
+                start_time += (21);
+                result.solution[i].push_back({start_time, 1, 1, batch_size});
+            }
+        }
+
+        LOG("finish users count: %d", result.completed_user_count);
+
+
+        return result;
     }
 };
 
-
-void solve() {
-    std::cin >> N;
-    for (int i = 1; i <= N; i ++) {
-        int gi, ki, mi; 
-        std::cin >> gi >> ki >> mi;
-        G = gi;
-        npus[i].resize(gi + 1);
-        for (int j = 1; j <= gi; j ++) {
-            npus[i][j] = NPU(i, j, mi, ki); 
-            // npus[i][j].init();
-        }
-    }
-
-    std::cin >> M;
-    users.resize(M + 1);
-    for (int i = 1; i <= M; i ++) {
-        int si, ei, cnti; 
-        std::cin >> si >> ei >> cnti;
-        users[i] = User(i, si, ei, cnti);
-    }
-
-    latency.resize(N + 1, std::vector<int>(M + 1));
-    for (int i = 1; i <= N; i ++) {
-        for (int j = 1; j <= M; j ++) {
-            std::cin >> latency[i][j];
-        }
-    }
-
-    std::cin >> A >> B; 
-    std::clog << A << " " << B << std::endl;
-
-    std::vector<std::vector<std::array<int, 4> > > ans(M + 1);
-    std::vector<std::vector<Simulator> > simulators(N + 1);
-    
-    for (int i = 1; i <= N; i ++) {
-        simulators[i].resize(npus[i].size());
-        for (int j = 1; j <(int)npus[i].size(); j ++) {
-            npus[i][j].init();
-            simulators[i][j] = Simulator(i, j, npus[i][j].totalMemory, npus[i][j].inferenceSpeed);
-        }
-        
-    } 
-
-    std::vector<int> userOrder, timeoutUsers;
-    for (int i = 1; i <= M; i ++) {
-        userOrder.push_back(i);
-    }
-    std::sort(userOrder.begin(), userOrder.end(), [&](int id1, int id2) {
-        return users[id1].startTime < users[id2].startTime;
-    });
-    
-    int currentServerId = 1, currentNpuId = 1;
-    for (int& userId: userOrder) {
-        simulators[currentServerId][currentNpuId].stimulateUsers.push_back(userId);
-        currentNpuId += 1;
-        if (currentNpuId >= (int)npus[currentServerId].size()) {
-            currentServerId += 1;
-            currentNpuId = 1;
-            if (currentServerId > N) {
-                currentServerId = 1;
-            }
-        }
-    }
-
-
-    for (int i = 1; i <= N; i ++) {
-        for (int j = 1; j <(int)npus[i].size(); j ++) {
-            simulators[i][j].stimulate();
-            std::vector<int> &ti = simulators[i][j].timeoutUsers;
-            timeoutUsers.insert(timeoutUsers.end(), ti.begin(), ti.end());
-        }
-    }
-
-    simulators[1][1].stimulateUsers = simulators[1][1].completedUsers;
-    simulators[1][1].stimulate();
-    std::clog << "again: " << simulators[1][1].timeoutUsers.size() << std::endl;
-    std::clog << "before iter, timeout count: " << timeoutUsers.size() << std::endl;
-    for (int userId: timeoutUsers) {
-        // std::clog << "try " << userId << std::endl;
-        bool assignSuccess = false;
-        for (int i = 1; i <= N; i ++) {
-            if (assignSuccess) continue;
-            for (int j = 1; j <(int)npus[i].size(); j ++) {
-                std::vector<int> originCompletedUsers = simulators[i][j].completedUsers;
-                simulators[i][j].stimulateUsers = simulators[i][j].completedUsers;
-                simulators[i][j].stimulateUsers.push_back(userId);
-                // std::clog << "again: " << simulators[1][1].stimulateUsers.size() << std::endl;
-                simulators[i][j].stimulate();
-                // std::clog << "again: " << simulators[1][1].completedUsers.size() << std::endl;
-                // std::clog << "again: " << simulators[1][1].timeoutUsers.size() << std::endl;
-                if ((int)simulators[i][j].timeoutUsers.size() == 0) {
-                    // std::clog << userId << " iter success!" << std::endl;
-                    // std::clog << "serverId, npuId: " << i << " " << j << std::endl;
-                    // std::clog << "completed count: " << simulators[i][j].completedUsers.size() << std::endl;
-                    assignSuccess = true;
-                } else {
-                    // std::clog << "recover! " << originCompletedUsers.size() << std::endl;
-                    simulators[i][j].stimulateUsers = originCompletedUsers;
-                    // simulators[i][j].stimulate();
-                    // std::clog << "recover over!" << std::endl;
-                }
-            }
-        }
-    }
-    
-    timeoutUsers.clear();
-
-    for (int i = 1; i <= N; i ++) {
-        for (int j = 1; j <(int)npus[i].size(); j ++) {
-            std::vector<int> &ti = simulators[i][j].timeoutUsers;
-            timeoutUsers.insert(timeoutUsers.end(), ti.begin(), ti.end());
-
-            for (auto&k : simulators[i][j].completedUsers) {
-                users[k].remainCount = simulators[i][j].userRemainCount[k];
-                ans[k].insert(ans[k].end(), simulators[i][j].ans[k].begin(), simulators[i][j].ans[k].end());
-            }
-
-            for (auto&k : simulators[i][j].timeoutUsers) {
-                users[k].remainCount = simulators[i][j].userRemainCount[k];
-                ans[k].insert(ans[k].end(), simulators[i][j].ans[k].begin(), simulators[i][j].ans[k].end());
-            }
-        }
-    }
-    
-
-    std::clog << "timeout count: " << timeoutUsers.size() << std::endl;
-    
-
-    for (int i = 1; i <= M; i ++) {
-        int startTime = 6e4 + 21;
-        while (users[i].remainCount > 0) {
-            int batchSize = std::min(users[i].remainCount, npus[1][1].maxBatchSize);
-            users[i].remainCount -= batchSize;
-            startTime += (latency[1][i] + 1);
-            ans[i].push_back({startTime, 1, 1, batchSize});
-        }
-    }
-
-
-    for (int i = 1; i <= M; i ++) { 
-        sort(ans[i].begin(), ans[i].end());
-        int cnt = std::min((int)ans[i].size(), 3000);
-        std::cout << cnt << std::endl;
-        
-
-        for (int j = 0; j < cnt; j ++) {
-            std::cout << ans[i][j][0] << " " << ans[i][j][1] << " "
-                << ans[i][j][2] << " " << ans[i][j][3] << " ";
-        }
-        std::cout << std::endl;
-    }
-}
-
-
+// ===================================================================
+// START: Main Function
+// ===================================================================
 
 int main() {
-    // std::ios::sync_with_stdio(false); std::cin.tie(0); std::clog.tie(0);
-    auto start_time = high_resolution_clock::now();
-    solve();
-    auto end_time = high_resolution_clock::now();
-    auto duration = duration_cast<milliseconds>(end_time - start_time);
-    std::cerr << "execution time: " << duration.count() << "ms." << std::endl;
+    auto program_start_time = std::chrono::steady_clock::now();
+    std::ios_base::sync_with_stdio(false);
+    std::cin.tie(NULL);
+
+    ProblemData data;
+    data.read(std::cin);
+
+    LOG("Data loaded. N_Servers: %d, M_Users: %d", data.n_servers, data.m_users);
+    if (data.n_servers > 0 && data.npus[1].size() > 1) {
+        LOG("NPU (1,1) properties: k=%d, memory=%d", 
+            data.npus[1][1].k, data.npus[1][1].memory);
+    }
+    
+    std::vector<std::unique_ptr<Solver>> solvers;
+    // solvers.push_back(std::make_unique<SimpleSolver>());
+    solvers.push_back(std::make_unique<TwoBlockSolver>());
+    
+    std::vector<std::vector<Schedule>> best_solution;
+    int max_completed_users = -1;
+    std::string best_solver_name = "None";
+
+    LOG("==============================================");
+    LOG("Starting Solver Competition...");
+    LOG("==============================================");
+
+    for (const auto& solver : solvers) {
+        LOG("--- Running Solver: %s ---", solver->name().c_str());
+        SolverResult result = solver->solve(data);
+        // **注意: 使用新的变量名**
+        LOG("--- [Result] Solver: %s | Predicted Completed Users: %d ---", 
+            solver->name().c_str(), result.completed_user_count);
+
+        // **注意: 使用新的变量名**
+        if (result.completed_user_count > max_completed_users) {
+            LOG("!!! New Best Solution Found! Previous best: %d users.", max_completed_users);
+            max_completed_users = result.completed_user_count;
+            best_solution = result.solution;
+            best_solver_name = solver->name();
+        }
+    }
+
+    LOG("==============================================");
+    LOG("Competition Finished!");
+    LOG("Best Solver (by fast prediction): %s", best_solver_name.c_str());
+    // **注意: 使用新的变量名**
+    LOG("Predicted Max Completed Users: %d", max_completed_users);
+    LOG("==============================================");
+
+    Solver::print_solution(best_solution, data.m_users);
+
+    auto program_end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed_seconds = program_end_time - program_start_time;
+    fprintf(stderr, "Total Execution Time: %.4f seconds\n", elapsed_seconds.count());
+
     return 0;
 }

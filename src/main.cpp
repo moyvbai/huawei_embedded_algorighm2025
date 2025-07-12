@@ -1,4 +1,18 @@
-#include <bits/stdc++.h>
+// #include <bits/stdc++.h>
+#include <iostream>
+#include <vector>
+#include <string>
+#include <numeric>
+#include <algorithm>
+#include <cmath>
+#include <memory>
+#include <map>
+#include <list>
+#include <cstdio>
+#include <chrono>
+#include <queue>
+#include <set>
+
 
 using arr2 = std::array<int, 2>;
 using arr3 = std::array<int, 3>;

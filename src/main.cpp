@@ -21,7 +21,7 @@ using arr4 = std::array<int, 4>;
 // ===================================================================
 // START: Logger System
 // ===================================================================
-#define DEBUG
+// #define DEBUG
 #ifdef DEBUG
     #define LOG(...) do { \
         fprintf(stderr, "[DEBUG] "); \
@@ -207,7 +207,7 @@ public:
     std::string name() const override { return "TwoBlockSolver"; }
     
     NpuSimulationResult simulate(NPU& npu, ProblemData& data, const std::vector<int>& simulate_users) {
-        LOG("runing simluate ...");
+        // LOG("runing simluate ...");
         int M = data.m_users, N = data.n_servers, A = data.mem_a, B = data.mem_b;
         int max_time = 6e4, server_id = npu.server_id, npu_id = npu.npu_id;
         int max_batch_size = (npu.memory - B) / A, memory = npu.memory;
@@ -436,7 +436,7 @@ public:
                         simulate_users[i][j] = new_simulate_users;
                         simulate_result[i][j] = res;
                         assign_success = true;
-                        LOG("user %d iter success, current completed count: %d", user_id, res.completed_users.size());
+                        // LOG("user %d iter success, current completed count: %d", user_id, res.completed_users.size());
                     }
                 }
             }
@@ -480,7 +480,7 @@ public:
     std::string name() const override { return "AutoBlockSolver"; }
     
     NpuSimulationResult simulate(NPU& npu, ProblemData& data, const std::vector<int>& simulate_users) {
-        LOG("runing simluate ...");
+        // LOG("runing simluate ...");
         int M = data.m_users, N = data.n_servers, A = data.mem_a, B = data.mem_b;
         int max_time = 6e4, server_id = npu.server_id, npu_id = npu.npu_id;
         int max_batch_size = (npu.memory - B) / A, memory = npu.memory;
@@ -566,12 +566,12 @@ public:
                         // LOG("batch size: %d", batch_size);
                         // LOG("can send: %d", can_send(user_id, batch_size));
 
-                        if (user_id == 118 and batch_size == 1) {
-                            LOG("current time: %d", current_time);
-                            LOG("can send: %d", can_send(current_time, user_id, batch_size));
-                            LOG("remain count: %d", remaining_send_count[user_id]);
-                            LOG("remain sample count: %d", remaining_samples[user_id]);
-                        }
+                        // if (user_id == 118 and batch_size == 1) {
+                        //     LOG("current time: %d", current_time);
+                        //     LOG("can send: %d", can_send(current_time, user_id, batch_size));
+                        //     LOG("remain count: %d", remaining_send_count[user_id]);
+                        //     LOG("remain sample count: %d", remaining_samples[user_id]);
+                        // }
 
 
 
@@ -698,11 +698,12 @@ public:
 
         // LOG("user 10: %d", users[10].cnt);
         LOG("begin iter");
-        int round = 1;
+        int round = 10;
         while (round --) {
             LOG("round: %d", round);
             std::vector<int> new_timeout_users;
             int idx = 0, sz = timeout_users.size();
+            int success_count = 0;
             int max_try_users_count = 500;
             while (idx < sz) {
                 bool assign_success = false;
@@ -725,11 +726,12 @@ public:
                             simulate_users[i][j] = new_simulate_users;
                             simulate_result[i][j] = res;
                             assign_success = true;
+                            success_count += (end - idx);
                         }
                     }
                 }
                 if (max_try_users_count == 1 and !assign_success) {
-                    LOG("assign fail, current idx: %d", idx);
+                    // LOG("assign fail, current idx: %d", idx);
                     new_timeout_users.push_back(timeout_users[idx]);
                     idx += 1;
                     max_try_users_count = 2;
@@ -746,18 +748,9 @@ public:
             std::sort(timeout_users.begin(), timeout_users.end(), [&](int u1, int u2) {
                 return users[u1].cnt < users[u2].cnt;
             });
+            LOG("success count: %d", success_count);
+            if (success_count == 0) break;
         }
-
-        // LOG("after add user 10, timeout users: ");
-        // std::vector<int> new_simulate_users = simulate_users[1][1];
-        // new_simulate_users.push_back(10);
-        // NpuSimulationResult res = simulate(npus[1][1], data, new_simulate_users);
-        // LOG("after add user 10, timeout users: ");
-        // for (auto& v: res.timeout_users) {
-        //     LOG("%d", v);
-        // }
-        // simulate_result[1][1] = res;
-
 
         
         std::vector<int> remaing_sample(data.m_users + 1, 0);
@@ -1095,7 +1088,7 @@ int main() {
     
     std::vector<std::unique_ptr<Solver>> solvers;
     // solvers.push_back(std::make_unique<SimpleSolver>());
-    // solvers.push_back(std::make_unique<TwoBlockSolver>());
+    solvers.push_back(std::make_unique<TwoBlockSolver>());
     solvers.push_back(std::make_unique<AutoBlockSolver>());
     // solvers.push_back(std::make_unique<AutoBlockWithReverseFillSolver>());
     

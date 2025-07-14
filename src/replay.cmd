@@ -1,1 +1,1 @@
-python replay_game.py --mem-file memory_log.txt --queue-file queue_log.txt
+python replay_pygame.py --file simulation_log.txt

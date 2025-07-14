@@ -1,12 +1,5 @@
 // validator.cpp
-// C++版高性能验证与评分脚本 (统一日志格式版)
-//
-// 编译命令 (Windows下使用g++):
-// g++ -std=c++17 -O2 -o validator.exe validator.cpp
-//
-// 编译命令 (Linux/macOS):
-// g++ -std=c++17 -O2 -o validator validator.cpp
-
+// C++版高性能验证与评分脚本 (统一日志最终版)
 
 #include <iostream>
 #include <fstream>
@@ -20,18 +13,24 @@
 #include <set>
 #include <iomanip>
 
-// --- 【修改1】更新QueueLogEntry结构体 ---
-struct MemoryLogEntry {
+// --- 【修改1】使用一个统一的日志结构体 ---
+struct LogEntry {
     long long time;
-    int npu_global_id, server_id, npu_local_id, used_memory, max_memory;
-};
-
-struct QueueLogEntry {
-    long long time;
+    // NPU Info
     int npu_global_id;
-    int server_id;    // 新增
-    int npu_local_id; // 新增
+    int server_id;
+    int npu_local_id;
+    // Instantaneous NPU State
+    int used_memory;
+    int max_memory;
     int queue_size;
+    int running_tasks_count;
+    // Throughput Info for this NPU at this tick
+    int completed_batch_size_npu;
+    // System-wide Cumulative State at this tick
+    long long cumulative_batch_size;
+    int cumulative_users_completed_on_time;
+    int cumulative_users_timeout;
 };
 
 // 其他数据结构无变化
@@ -52,6 +51,7 @@ struct Server {
 struct User {
     int id, cnt_required, cnt_processed = 0, last_npu_global_id = -1, migrations = 0;
     long long s, e, finish_time = -1, next_allowed_send_time;
+    bool has_finished = false;
     std::vector<Request> requests;
 };
 
@@ -61,8 +61,7 @@ public:
     Simulator(const std::string& input_path, const std::string& output_path);
     void run();
     void calculate_score();
-    void save_memory_log(const std::string& filepath = "memory_log.txt");
-    void save_queue_log(const std::string& filepath = "queue_log.txt");
+    void save_log_file(const std::string& filepath = "simulation_log.txt"); // 修改为统一的保存函数
 
 private:
     std::vector<Server> servers;
@@ -72,8 +71,13 @@ private:
     int mem_a, mem_b;
     long long total_samples_to_process = 0;
     
-    std::vector<MemoryLogEntry> memory_log;
-    std::vector<QueueLogEntry> queue_log;
+    // 【修改1】只使用一个vector来存储所有日志
+    std::vector<LogEntry> log_data;
+
+    // 吞吐量相关的状态追踪变量
+    long long cumulative_batch_size_processed = 0;
+    int cumulative_users_completed_on_time = 0;
+    int cumulative_users_timeout = 0;
 
     enum class EventType { SEND, ARRIVE };
     std::map<long long, std::vector<std::pair<EventType, Request>>> events;
@@ -94,8 +98,7 @@ int main(int argc, char* argv[]) {
         Simulator simulator(argv[1], argv[2]);
         simulator.run();
         simulator.calculate_score();
-        simulator.save_memory_log();
-        simulator.save_queue_log();
+        simulator.save_log_file(); // 【修改4】只调用一个保存函数
     } catch (const std::exception& e) {
         std::cerr << "\nAn unexpected error occurred: " << e.what() << std::endl;
         return 1;
@@ -104,7 +107,7 @@ int main(int argc, char* argv[]) {
 }
 
 // --- Simulator类方法实现 ---
-// ... parse_input, parse_output 等未修改的函数已省略 ...
+// ... parse_input, parse_output 等未修改的函数已省略，使用您提供的版本 ...
 Simulator::Simulator(const std::string& input_path, const std::string& output_path) {
     std::cout << "--- 1. Parsing Input File ---" << std::endl;
     parse_input(input_path);
@@ -193,31 +196,40 @@ void Simulator::populate_initial_events() {
 }
 
 void Simulator::run() {
-    std::cout << "--- 3. Starting Simulation (with separated logs) ---" << std::endl;
+    std::cout << "--- 3. Starting Simulation ---" << std::endl;
     long long current_time = 0;
     long long processed_samples = 0;
     std::set<int> npus_to_re_evaluate;
     int last_percent = -1;
     const int BAR_WIDTH = 50;
-
     while (processed_samples < total_samples_to_process) {
         if (current_time > 2000000) fail_with_error("Simulation Timeout", "Simulation exceeded maximum time limit (2,000,000ms).");
         npus_to_re_evaluate.clear();
+        std::map<int, int> completed_batch_per_npu_tick;
+
         for (auto& [gid, npu] : npu_map) {
-            bool has_finished_tasks_this_tick = false;
             auto it = npu.running_tasks.begin();
             while (it != npu.running_tasks.end()) {
                 if (it->finish_time == current_time) {
-                    has_finished_tasks_this_tick = true;
+                    npus_to_re_evaluate.insert(gid);
                     User& user = users.at(it->request.user_id);
+                    completed_batch_per_npu_tick[gid] += it->request.batch_size;
+                    cumulative_batch_size_processed += it->request.batch_size;
+                    if (!user.has_finished && user.cnt_processed + it->request.batch_size >= user.cnt_required) {
+                        user.has_finished = true;
+                        if (current_time <= user.e) {
+                            cumulative_users_completed_on_time++;
+                        } else {
+                            cumulative_users_timeout++;
+                        }
+                    }
                     user.cnt_processed += it->request.batch_size;
                     processed_samples += it->request.batch_size;
-                    if (user.cnt_processed == user.cnt_required) user.finish_time = current_time;
+                    if (user.cnt_processed >= user.cnt_required) user.finish_time = current_time;
                     npu.used_memory -= it->memory_used;
                     it = npu.running_tasks.erase(it);
                 } else ++it;
             }
-            if (has_finished_tasks_this_tick) npus_to_re_evaluate.insert(gid);
         }
         if (events.count(current_time)) {
             for (const auto& [type, payload] : events.at(current_time)) {
@@ -256,11 +268,28 @@ void Simulator::run() {
             }
         }
         
-        // 【修改2】分别记录两种日志
-        for (const auto& gid : npus_to_re_evaluate) {
-            const auto& npu = npu_map.at(gid);
-            memory_log.push_back({current_time, gid, npu.server_id, npu.local_id, npu.used_memory, npu.memory_limit});
-            queue_log.push_back({current_time, gid, npu.server_id, npu.local_id, static_cast<int>(npu.queue.size())});
+        // 【修改2】统一的日志记录逻辑
+        std::set<int> all_changed_npus = npus_to_re_evaluate;
+        for(const auto& [gid, _] : completed_batch_per_npu_tick) {
+            all_changed_npus.insert(gid);
+        }
+
+        if (!all_changed_npus.empty()) {
+            for (const auto& gid : all_changed_npus) {
+                const auto& npu = npu_map.at(gid);
+                int completed_batch_npu = completed_batch_per_npu_tick.count(gid) ? completed_batch_per_npu_tick[gid] : 0;
+                log_data.push_back({
+                    current_time,
+                    gid, npu.server_id, npu.local_id,
+                    npu.used_memory, npu.memory_limit,
+                    static_cast<int>(npu.queue.size()),
+                    static_cast<int>(npu.running_tasks.size()),
+                    completed_batch_npu,
+                    cumulative_batch_size_processed,
+                    cumulative_users_completed_on_time,
+                    cumulative_users_timeout
+                });
+            }
         }
         
         int percent = (total_samples_to_process > 0) ? static_cast<int>(100.0 * processed_samples / total_samples_to_process) : 100;
@@ -309,52 +338,48 @@ void Simulator::calculate_score() {
 }
 
 
-// 【修改3】拆分并更新保存函数
-void Simulator::save_memory_log(const std::string& filepath) {
-    std::cout << "--- 5. Saving Memory Log ---" << std::endl;
-    if (memory_log.empty()) {
-        std::cout << "No memory log data was recorded." << std::endl;
+// 【修改3】统一的日志保存函数
+void Simulator::save_log_file(const std::string& filepath) {
+    std::cout << "--- 5. Saving Comprehensive Log ---" << std::endl;
+    if (log_data.empty()) {
+        std::cout << "No log data was recorded." << std::endl;
         return;
     }
     std::ofstream file(filepath);
     if (!file.is_open()) {
-        std::cerr << "Error saving memory log to '" << filepath << "'" << std::endl;
+        std::cerr << "Error saving log to '" << filepath << "'" << std::endl;
         return;
     }
-    file << std::left << std::setw(10) << "Time" << std::setw(15) << "NPU_Global_ID" << std::setw(12) << "Server_ID" << std::setw(14) << "NPU_Local_ID" << std::setw(15) << "Used_Memory" << "Max_Memory" << "\n";
-    file << std::string(80, '-') << "\n";
-    for (const auto& entry : memory_log) {
-        // 只记录关键点即可，不再需要判断值是否大于0
-        file << std::left << std::setw(10) << entry.time << std::setw(15) << entry.npu_global_id << std::setw(12) << entry.server_id << std::setw(14) << entry.npu_local_id << std::setw(15) << entry.used_memory << entry.max_memory << "\n";
-    }
-    std::cout << "Memory log successfully saved to '" << filepath << "'" << std::endl;
-}
-
-void Simulator::save_queue_log(const std::string& filepath) {
-    std::cout << "--- 6. Saving Queue Log ---" << std::endl;
-    if (queue_log.empty()) {
-        std::cout << "No queue log data was recorded." << std::endl;
-        return;
-    }
-    std::ofstream file(filepath);
-    if (!file.is_open()) {
-        std::cerr << "Error saving queue log to '" << filepath << "'" << std::endl;
-        return;
-    }
+    
     file << std::left 
          << std::setw(10) << "Time" 
-         << std::setw(15) << "NPU_Global_ID" 
-         << std::setw(12) << "Server_ID" 
-         << std::setw(14) << "NPU_Local_ID" 
-         << "Queue_Size" << "\n";
-    file << std::string(55, '-') << "\n";
-    for (const auto& entry : queue_log) {
+         << std::setw(15) << "NPU_Global_ID"
+         << std::setw(12) << "Server_ID"
+         << std::setw(14) << "NPU_Local_ID"
+         << std::setw(15) << "Used_Memory"
+         << std::setw(12) << "Max_Memory"
+         << std::setw(12) << "Queue_Size"
+         << std::setw(22) << "Running_Tasks_Count"
+         << std::setw(28) << "Completed_Batch_Size_NPU" 
+         << std::setw(28) << "Cumulative_Batch_Size" 
+         << std::setw(35) << "Cumulative_Users_Completed_OnTime" 
+         << "Cumulative_Users_Timeout" << "\n";
+    file << std::string(200, '-') << "\n";
+
+    for (const auto& entry : log_data) {
         file << std::left 
              << std::setw(10) << entry.time 
              << std::setw(15) << entry.npu_global_id 
              << std::setw(12) << entry.server_id 
              << std::setw(14) << entry.npu_local_id 
-             << entry.queue_size << "\n";
+             << std::setw(15) << entry.used_memory 
+             << std::setw(12) << entry.max_memory
+             << std::setw(12) << entry.queue_size
+             << std::setw(22) << entry.running_tasks_count
+             << std::setw(28) << entry.completed_batch_size_npu
+             << std::setw(28) << entry.cumulative_batch_size 
+             << std::setw(35) << entry.cumulative_users_completed_on_time
+             << entry.cumulative_users_timeout << "\n";
     }
-    std::cout << "Queue log successfully saved to '" << filepath << "'" << std::endl;
+    std::cout << "Comprehensive log successfully saved to '" << filepath << "'" << std::endl;
 }

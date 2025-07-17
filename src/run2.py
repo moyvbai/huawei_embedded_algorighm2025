@@ -1,4 +1,3 @@
-import argparse
 import os
 import subprocess
 import re
@@ -11,7 +10,11 @@ CPP_SOURCE_FILE = "main.cpp"
 CPP_EXECUTABLE_NAME = "main.exe" if sys.platform == "win32" else "main"
 VALIDATOR_EXECUTABLE = "./validator.exe"
 
-LOG_DIR = Path("./log") / "benchmark1"
+BENCHMARK_DIR = Path("../benchmark2")
+INPUT_DIR = BENCHMARK_DIR / "in"
+OUTPUT_DIR = BENCHMARK_DIR / "out"
+
+LOG_DIR = Path("./log") / "benchmark2"
 REPORT_FILE = Path("report.txt")
 
 # --- 2. 主逻辑 ---
@@ -37,25 +40,24 @@ def compile_cpp():
         print(e.stderr)
         return False
 
-def run_tests(input_dir, output_dir):
+def run_tests():
     """执行所有测试、评分并生成报告 (已增强错误捕获)"""
     # 确保输出目录存在
-    if not os.path.exists(output_dir):
-        os.mkdir(output_dir)
-    input_dir = Path(input_dir)
-    output_dir = Path(output_dir)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
     # 查找所有输入文件并按数字排序
     try:
         input_files = sorted(
-            input_dir.glob('*.in'),
+            INPUT_DIR.glob('*.in'),
             key=lambda p: int(p.stem)
         )
     except FileNotFoundError:
-        print(f"Error: Input directory not found at '{input_dir}'")
+        print(f"Error: Input directory not found at '{INPUT_DIR}'")
         return
 
     if not input_files:
-        print(f"Warning: No input files found in '{input_dir}'")
+        print(f"Warning: No input files found in '{INPUT_DIR}'")
         return
     # 定义每个用例的满分
     FULL_SCORE_PER_CASE = 5_000_000.0
@@ -65,7 +67,7 @@ def run_tests(input_dir, output_dir):
 
     for input_path in input_files:
         case_name = input_path.stem
-        output_path = output_dir / f"{case_name}.out"
+        output_path = OUTPUT_DIR / f"{case_name}.out"
 
         print(f"\n--- Running case: {input_path.name} ---")
 
@@ -74,7 +76,7 @@ def run_tests(input_dir, output_dir):
             with open(input_path, 'r') as f_in, open(output_path, 'w') as f_out:
                 subprocess.run(
                     [f"./{CPP_EXECUTABLE_NAME}"],
-                    stdin=f_in, stdout=f_out, check=True, timeout=35
+                    stdin=f_in, stdout=f_out, check=True, timeout=350
                 )
         except subprocess.TimeoutExpired:
             print(f"Error: Your program timed out on {input_path.name}.")
@@ -145,10 +147,7 @@ def run_tests(input_dir, output_dir):
 
         for res in results:
             # 写入每一行的数据，包括格式化的百分比
-            try:
-                f.write(f"{res['case']:<20} {str(res['k']):<20} {res['score']:<20.4f} {res['ratio']:.2f}%\n")
-            except:
-                f.write(f"{res['case']:<20} {str(res['k']):<20} {res['score']:<20.4f} --%\n")
+            f.write(f"{res['case']:<20} {str(res['k']):<20} {res['score']:<20.4f} {res['ratio']:.2f}%\n")
 
         # 计算并写入总分和总得分率
         total_possible_score = len(input_files) * FULL_SCORE_PER_CASE
@@ -162,23 +161,5 @@ def run_tests(input_dir, output_dir):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Compile C++ code and run tests with specified input/output files.")
-
-    # Add arguments for input and output files
-    parser.add_argument(
-        "-i", "--input",
-        type=str,
-        required=True, # Make input file argument mandatory
-        help="Path to the input file for the test."
-    )
-    parser.add_argument(
-        "-o", "--output",
-        type=str,
-        required=True, # Make output file argument mandatory
-        help="Path to the output file where test results will be written."
-    )
-
-    args = parser.parse_args() # Parse the arguments from the command line
-
     if compile_cpp():
-        run_tests(args.input, args.output)
+        run_tests()

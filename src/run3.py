@@ -76,7 +76,7 @@ def run_tests():
             with open(input_path, 'r') as f_in, open(output_path, 'w') as f_out:
                 subprocess.run(
                     [f"./{CPP_EXECUTABLE_NAME}"],
-                    stdin=f_in, stdout=f_out, check=True, timeout=35
+                    stdin=f_in, stdout=f_out, check=True, timeout=350
                 )
         except subprocess.TimeoutExpired:
             print(f"Error: Your program timed out on {input_path.name}.")

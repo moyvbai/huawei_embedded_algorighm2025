@@ -2,164 +2,223 @@ import os
 import subprocess
 import re
 import sys
+import argparse
+import time
 from pathlib import Path
+from multiprocessing import Pool, cpu_count
 
 # --- 1. 配置区域 ---
-# 您可以在这里修改文件和目录名
 CPP_SOURCE_FILE = "main.cpp"
 CPP_EXECUTABLE_NAME = "main.exe" if sys.platform == "win32" else "main"
 VALIDATOR_EXECUTABLE = "./validator.exe"
 
-BENCHMARK_DIR = Path("../benchmark1")
-INPUT_DIR = BENCHMARK_DIR / "in"
-OUTPUT_DIR = BENCHMARK_DIR / "out"
+# 【修改点】输出目录基础路径已更改，并删除了 LOG_DIR_BASE
+OUTPUT_DIR_BASE = Path("../tmp")
 
-LOG_DIR = Path("./log") / "benchmark1"
 REPORT_FILE = Path("report.txt")
+FULL_SCORE_PER_CASE = 5_000_000.0
+MAX_PROCESSES = 4
 
-# --- 2. 主逻辑 ---
+# --- 2. 核心函数 ---
 
 def compile_cpp():
     """编译 C++ 源代码"""
-    print(f"--- Compiling {CPP_SOURCE_FILE} -> {CPP_EXECUTABLE_NAME} ---")
+    print(f"--- 正在编译 {CPP_SOURCE_FILE} -> {CPP_EXECUTABLE_NAME} ---")
     try:
-        # 使用 -O2 优化和 C++11 标准
         compile_command = [
             "g++", CPP_SOURCE_FILE,
             "-o", CPP_EXECUTABLE_NAME,
             "-O2", "-std=c++17"
         ]
         subprocess.run(compile_command, check=True, capture_output=True, text=True)
-        print("Compilation successful.")
+        print("编译成功。")
         return True
     except FileNotFoundError:
-        print("Error: g++ compiler not found. Please ensure it's in your system's PATH.")
+        print("错误: 未找到 g++ 编译器。请确保它已添加到系统的 PATH 中。")
         return False
     except subprocess.CalledProcessError as e:
-        print("Error: Compilation failed.")
+        print("错误: 编译失败。")
         print(e.stderr)
         return False
 
-def run_tests():
-    """执行所有测试、评分并生成报告 (已增强错误捕获)"""
-    # 确保输出目录存在
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+def run_single_test(input_path: Path):
+    """
+    运行单个测试用例、评分、记录时间并返回结果字典。
+    """
+    case_name = input_path.stem
+    relative_parent = input_path.parent.name
+    output_dir = OUTPUT_DIR_BASE / relative_parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    output_path = output_dir / f"{case_name}.out"
+    
+    print(f"--- 开始运行测试用例: {input_path.name} ---")
 
-    # 查找所有输入文件并按数字排序
+    runtime = 0.0
+    # 1. 运行你的 C++ 程序并记录时间
     try:
-        input_files = sorted(
-            INPUT_DIR.glob('*.in'),
-            key=lambda p: int(p.stem)
-        )
-    except FileNotFoundError:
-        print(f"Error: Input directory not found at '{INPUT_DIR}'")
-        return
-
-    if not input_files:
-        print(f"Warning: No input files found in '{INPUT_DIR}'")
-        return
-    # 定义每个用例的满分
-    FULL_SCORE_PER_CASE = 5_000_000.0
-    results = []
-    total_score = 0.0
-    sample_count = 0
-
-    for input_path in input_files:
-        case_name = input_path.stem
-        output_path = OUTPUT_DIR / f"{case_name}.out"
-
-        print(f"\n--- Running case: {input_path.name} ---")
-
-        # 1. 运行你的 C++ 程序 (逻辑不变)
-        try:
-            with open(input_path, 'r') as f_in, open(output_path, 'w') as f_out:
-                subprocess.run(
-                    [f"./{CPP_EXECUTABLE_NAME}"],
-                    stdin=f_in, stdout=f_out, check=True, timeout=35
-                )
-        except subprocess.TimeoutExpired:
-            print(f"Error: Your program timed out on {input_path.name}.")
-            results.append({'case': input_path.name, 'k': 'Timeout', 'score': 0.0})
-            continue
-        except Exception as e:
-            print(f"An error occurred while running your program on {input_path.name}: {e}")
-            results.append({'case': input_path.name, 'k': 'Runtime Error', 'score': 0.0})
-            continue
-
-        # --- 【修改点】: 增强 validator 的错误捕获和显示 ---
-        try:
-            validator_command = [VALIDATOR_EXECUTABLE, str(input_path), str(output_path)]
-            result = subprocess.run(
-                validator_command,
-                check=True,          # 如果validator失败，则抛出异常
-                capture_output=True, # 捕获stdout和stderr
-                text=True,           # 以文本模式处理流
-                encoding='utf-8',    # 指定编码
-                errors='ignore'      # 忽略解码错误
+        with open(input_path, 'r') as f_in, open(output_path, 'w') as f_out:
+            start_time = time.monotonic()
+            subprocess.run(
+                [f"./{CPP_EXECUTABLE_NAME}"],
+                stdin=f_in, stdout=f_out, check=True
             )
-            validator_output = result.stdout
+            end_time = time.monotonic()
+            runtime = end_time - start_time
+            
+    except Exception as e:
+        print(f"程序在处理 {input_path.name} 时发生运行时错误: {e}")
+        return {'case': input_path.name, 'k': 'Runtime Error', 'score': 0.0, 'ratio': 0.0, 'runtime': 0.0}
 
-            # 正常解析
-            k_match = re.search(r"Late Users \(K\):\s*(\d+)", validator_output)
-            score_match = re.search(r"FINAL SCORE:\s*([\d\.]+)", validator_output)
+    # 2. 运行验证器 (Validator)
+    try:
+        validator_command = [VALIDATOR_EXECUTABLE, str(input_path), str(output_path)]
+        result = subprocess.run(
+            validator_command,
+            check=True, capture_output=True, text=True,
+            encoding='utf-8', errors='ignore'
+        )
+        validator_output = result.stdout
+        
+        k_match = re.search(r"Late Users \(K\):\s*(\d+)", validator_output)
+        score_match = re.search(r"FINAL SCORE:\s*([\d\.]+)", validator_output)
 
-            if k_match and score_match:
-                late_users = int(k_match.group(1))
-                final_score = float(score_match.group(1))
+        if k_match and score_match:
+            late_users = int(k_match.group(1))
+            final_score = float(score_match.group(1))
+            score_ratio = (final_score / FULL_SCORE_PER_CASE) * 100 if FULL_SCORE_PER_CASE > 0 else 0
+            
+            print(f"结果: {input_path.name}: Runtime = {runtime:.2f}s, K = {late_users}, Score = {final_score:.4f}")
+            return {'case': input_path.name, 'k': late_users, 'score': final_score, 'ratio': score_ratio, 'runtime': runtime}
+        else:
+            print(f"错误: 无法解析 {input_path.name} 的验证器输出。")
+            return {'case': input_path.name, 'k': 'Parse Error', 'score': 0.0, 'ratio': 0.0, 'runtime': runtime}
 
-                # ---【修改点】---
-                # 计算并存储得分率
-                score_ratio = (final_score / FULL_SCORE_PER_CASE) * 100 if FULL_SCORE_PER_CASE > 0 else 0
-                results.append({'case': input_path.name, 'k': late_users, 'score': final_score, 'ratio': score_ratio})
+    except subprocess.CalledProcessError as e:
+        print(f"错误: 验证器在处理 {input_path.name} 时异常退出。")
+        print("--- Validator Standard Error (错误流信息) ---")
+        print(e.stderr)
+        return {'case': input_path.name, 'k': 'Validator Crash', 'score': 0.0, 'ratio': 0.0, 'runtime': runtime}
+    except FileNotFoundError:
+        print(f"错误: 验证器未找到 '{VALIDATOR_EXECUTABLE}'")
+        return {'error': 'Validator Not Found'}
+    except Exception as e:
+        print(f"运行验证器时发生未知错误 ({input_path.name}): {e}")
+        return {'case': input_path.name, 'k': 'Scorer Error', 'score': 0.0, 'ratio': 0.0, 'runtime': runtime}
 
-                total_score += final_score
-                print(f"Result: K = {late_users}, Score = {final_score:.4f}, Ratio = {score_ratio:.2f}%")
-            else:
-                print("Error: Could not parse validator output.")
-                results.append({'case': input_path.name, 'k': 'Parse Error', 'score': 0.0, 'ratio': 0.0})
-
-
-        except subprocess.CalledProcessError as e:
-            # 当 validator.exe 返回非零退出码时，捕获此异常
-            print(f"Error: Validator exited with a non-zero status for {input_path.name}.")
-            print("--- Validator Standard Output ---")
-            print(e.stdout)
-            print("--- Validator Standard Error (错误流信息) ---")
-            print(e.stderr) # <-- 核心改动：打印错误流
-            print("------------------------------------------")
-            results.append({'case': input_path.name, 'k': 'Validator Crash', 'score': 0.0})
-        except FileNotFoundError:
-            print(f"Error: Validator not found at '{VALIDATOR_EXECUTABLE}'")
-            return
-        except Exception as e:
-            print(f"An unexpected error occurred while running the validator on {input_path.name}: {e}")
-            results.append({'case': input_path.name, 'k': 'Scorer Error', 'score': 0.0})
-
-    # 生成包含新列的最终报告
-    print(f"\n--- Generating report file: {REPORT_FILE} ---")
+def generate_report(results, total_files):
+    """根据收集到的所有结果生成报告文件"""
+    print(f"\n--- 正在生成报告文件: {REPORT_FILE} ---")
+    total_score = 0.0
+    
     with open(REPORT_FILE, 'w', encoding='utf-8') as f:
         f.write("--- Automated Test Report ---\n\n")
-        # 增加表头并调整宽度
-        header = f"{'Case Name':<20} {'Late Users (K)':<20} {'Final Score':<20} {'Est. Score Ratio (%)':<25}\n"
+        header = f"{'Case Name':<20} {'Late Users (K)':<20} {'Final Score':<20} {'Est. Score Ratio (%)':<25} {'Runtime (s)':<15}\n"
         f.write(header)
         f.write("-" * len(header) + "\n")
 
-        for res in results:
-            # 写入每一行的数据，包括格式化的百分比
-            f.write(f"{res['case']:<20} {str(res['k']):<20} {res['score']:<20.4f} {res['ratio']:.2f}%\n")
+        def sort_key(res):
+            match = re.search(r'\d+', res['case'])
+            return int(match.group()) if match else float('inf')
 
-        # 计算并写入总分和总得分率
-        total_possible_score = len(input_files) * FULL_SCORE_PER_CASE
+        sorted_results = sorted(results, key=sort_key)
+
+        for res in sorted_results:
+            total_score += res['score']
+            runtime_str = f"{res.get('runtime', 0.0):.2f}"
+            ratio_str = f"{res.get('ratio', 0.0):.2f}%"
+            
+            f.write(
+                f"{res['case']:<20} "
+                f"{str(res['k']):<20} "
+                f"{res['score']:<20.4f} "
+                f"{ratio_str:<25} "
+                f"{runtime_str:<15}\n"
+            )
+
+        total_possible_score = total_files * FULL_SCORE_PER_CASE
         overall_ratio = (total_score / total_possible_score) * 100 if total_possible_score > 0 else 0
 
         f.write("-" * len(header) + "\n")
         f.write(f"{'TOTAL SCORE:':<40} {total_score:<20.4f}\n")
         f.write(f"{'OVERALL SCORE RATIO:':<40} {overall_ratio:<20.2f}%\n")
 
-    print("Report generated successfully.")
+    print("报告生成成功。")
 
+# --- 3. 主逻辑 ---
+def main(args):
+    """主逻辑：协调编译、测试和报告生成"""
+    if not compile_cpp():
+        sys.exit(1)
+
+    input_path = Path(args.input_path)
+    if not input_path.exists():
+        print(f"错误: 提供的路径不存在 '{input_path}'")
+        sys.exit(1)
+
+    input_files = []
+    if input_path.is_file():
+        print(f"检测到单个输入文件: {input_path}")
+        input_files.append(input_path)
+    elif input_path.is_dir():
+        print(f"检测到输入目录: {input_path}")
+        input_files = sorted(
+            list(input_path.glob('*.in')),
+            key=lambda p: int(p.stem) if p.stem.isdigit() else float('inf')
+        )
+
+    if not input_files:
+        print(f"警告: 在 '{input_path}' 中未找到任何 '.in' 文件。")
+        return
+
+    print(f"共找到 {len(input_files)} 个测试用例。")
+    
+    results = []
+    # 【修改点】根据命令行参数决定是并行还是顺序执行
+    if len(input_files) > 1 and not args.sequential:
+        # 默认行为：并行处理
+        num_processes = min(MAX_PROCESSES, cpu_count() or 1)
+        print(f"使用 {num_processes} 个进程并行测试...")
+        with Pool(processes=num_processes) as pool:
+            results = pool.map(run_single_test, input_files)
+    else:
+        # 顺序执行（当只有一个文件或指定了 --sequential 时）
+        if len(input_files) > 1:
+            print("按顺序执行测试...")
+        for file_path in input_files:
+            result = run_single_test(file_path)
+            results.append(result)
+            # 如果出现致命错误，则提前中止
+            if result.get('error'):
+                break
+    
+    if any(res.get('error') for res in results):
+        print("因致命错误导致测试中止。")
+        sys.exit(1)
+        
+    valid_results = [res for res in results if res is not None]
+
+    if valid_results:
+        generate_report(valid_results, len(input_files))
 
 if __name__ == "__main__":
-    if compile_cpp():
-        run_tests()
+    parser = argparse.ArgumentParser(
+        description="编译并运行C++代码的自动化测试脚本，并记录运行时间。",
+        epilog="示例: \n"
+               "  并行测试 (默认): python run_test.py ../benchmark1/in\n"
+               "  顺序测试: python run_test.py ../benchmark1/in --sequential",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument(
+        "input_path",
+        help="输入文件的路径，或包含'.in'文件的目录路径。"
+    )
+    # 【修改点】增加 --sequential 参数
+    parser.add_argument(
+        '--sequential',
+        action='store_true',
+        help='如果设置此项，则按顺序执行测试，而不是并行执行。'
+    )
+    
+    args = parser.parse_args()
+    main(args)

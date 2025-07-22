@@ -12,7 +12,7 @@ using arr4 = std::array<int, 4>;
 // ===================================================================
 // START: Logger System
 // ===================================================================
-// #define DEBUG
+#define DEBUG
 #ifdef DEBUG
     #define LOG(...) do { \
         fprintf(stderr, "[DEBUG] "); \
@@ -47,6 +47,11 @@ struct User {
     int calculate_batch(int mem) const {
         return std::max(0, (mem - b) / a);
     };
+
+    /*根据batch size计算memory*/
+    int calculate_memory(int batch_size) const {
+        return batch_size * a + b;
+    }
 };
 
 struct Schedule {
@@ -133,7 +138,7 @@ public:
     std::string name() const override { return "NPUAutoTimeBlockModule"; }
     NpuSimulationResult run(const NPU& npu, const ProblemData& data, 
         const std::vector<int>& assigned_users) const override {
-        LOG("%s module is running!", name().c_str());
+        // LOG("%s module is running!", name().c_str());
 
         // 一些数据相关的定义
         int M = data.m_users, N = data.n_servers, memory = npu.memory;
@@ -187,7 +192,7 @@ public:
             int handle_time = calculate_handle_time(user_id, max_batch_size);
             int free_time = users[user_id].e - time;
             // return 100 * free_time / handle_time;
-            return users[user_id].e - calculate_handle_time(user_id, max_batch_size);
+            return users[user_id].e - 3 * calculate_handle_time(user_id, max_batch_size) / 2;
         };
 
         
@@ -203,8 +208,10 @@ public:
         /*更新显存占用*/
         auto update_memory = [&](int time, int user_id, int batch_size) {
             int handle_time = npu.calculate_time(batch_size);
+            // LOG("bath size: %d, memory: %d", batch_size, users[user_id].calculate_memory(batch_size));
+            // LOG("user a, b: %d, %d", users[user_id].a, users[user_id].b);
             for (int i = time; i < time + handle_time; i ++) {
-                memory_usage[i] += (batch_size * users[user_id].a + users[user_id].b);
+                memory_usage[i] += users[user_id].calculate_memory(batch_size);
             }
         };
 
@@ -228,7 +235,7 @@ public:
 
         /*判断能够在某一个时间节点发送一个batch size*/
         auto can_send = [&](int time, int user_id, int batch) {
-            if (batch <= 0) return false;
+            // if (batch <= 0) return false;
             if (remaining_send_count[user_id] <= 0) return false;
             int max_batch_size = (memory - users[user_id].b) / users[user_id].a;
             if (remaining_samples[user_id] - batch > (remaining_send_count[user_id] - 1) * max_batch_size) return false;
@@ -240,24 +247,29 @@ public:
         /*在某个时间节点的发送策略*/
         auto send_strategy = [&](int time) {
             while (!available_users.empty()) {
-                int user_id = available_users.top().second;
-                available_users.pop(); 
+                int user_id = available_users.top().second; 
+                available_users.pop();
                 int max_batch_size = users[user_id].calculate_batch(memory);
                 int free_batch_size = users[user_id].calculate_batch(memory - memory_usage[time]);
 
                 if (free_batch_size <= 0) {
                     waiting_users.push({time, user_id}); 
-                    continue;
+                    // continue;
+                    break;
                 }
+                
+                
 
                 if (finish_time <= time) { // 对于优先级最高的用户
                     // 枚举时间块
                     int A = users[user_id].a, B = users[user_id].b;
-                    int max_block_time = npu.calculate_time(max_batch_size);
+                    int max_block_count = memory / (2 * B), max_block_time = npu.calculate_time(max_batch_size);
+                    int min_block_time = npu.calculate_time((memory / max_block_count - B) / A);
+                    
+                    if (available_users.size() <= 2) min_block_time = max_block_time;
+
                     int best_batch_size = 1, best_block_time = 1;
                     double best_util = 0;
-                    int min_block_time = 1;
-                    if (available_users.size() == 0) min_block_time = max_block_time - 1;
                 
                     for (int block_time = min_block_time; block_time <= max_block_time; block_time ++) {
                         int batch_size = (block_time * npu.k) * (block_time * npu.k);
@@ -307,6 +319,7 @@ public:
 
         // 开始进行模拟
         for (int time = 0; time <= max_time; time ++) {
+            // LOG("current time: %d", time);
             update_avaliable_users(time);
             send_strategy(time);
         }
@@ -377,13 +390,13 @@ public:
         LOG("begin iter");
         auto program_start_time = std::chrono::steady_clock::now();
         int round = 3;
-        std::vector<int> r = {1, 1, 2};
+        std::vector<int> r = {1, 1, 1, 1};
         while (round --) {
             LOG("round %d is running", round);
             std::vector<int> new_timeout_users;
             int idx = 0, sz = timeout_users.size();
             int success_count = 0;
-            int max_try_users_count = 100;
+            int max_try_users_count = 500;
             while (idx < sz) {
                 bool assign_success = false;
                 auto program_current_time = std::chrono::steady_clock::now();
@@ -420,7 +433,7 @@ public:
             
             timeout_users = new_timeout_users;
             std::sort(timeout_users.begin(), timeout_users.end(), [&](int u1, int u2) {
-                return users[u1].cnt < users[u2].cnt;
+                return users[u1].cnt * users[u1].a + users[u1].b < users[u2].cnt * users[u2].a + users[u2].b;
             });
             LOG("this round new success count: %d", success_count);
             if (success_count == 0) break;
@@ -474,6 +487,7 @@ public:
         auto& remaining_samples = result.remaining_samples;
         std::vector<int>& memory_usage = result.memory_usage; 
         memory_usage.resize(max_time + 100, 0);
+        schedules.resize(M + 1);
         int& finish_time = result.finish_time;
 
         // 定义一些模拟过程中需要记录的信息
@@ -672,7 +686,7 @@ public:
             simulate_timeout_users[server_id][npu_id].push_back(v);
         }
 
-        LOG("timeout users assign over!, ready for handle %d", simulate_timeout_users[1][1].size());
+        LOG("timeout users assign over!, ready for handle %d users", simulate_timeout_users[1][1].size());
 
         for (int i = 1; i <= data.n_servers; i ++) {
             for (int j = 1; j < (int)data.npus[i].size(); j ++) {
@@ -683,6 +697,7 @@ public:
         LOG("timeout users handle out!");
         for (int i = 1; i <= data.n_servers; i ++) {
             for (int j = 1; j < data.npus[i].size(); j ++) {
+                LOG("sz: %d", simulate_results[i][j].schedules.size());
                 for (int user_id = 1; user_id <= data.m_users; user_id ++) {
                     auto& schedule = simulate_results[i][j].schedules[user_id];
                     solution[user_id].insert(solution[user_id].end(), schedule.begin(), schedule.end());

@@ -175,14 +175,14 @@ def main(args):
     
     results = []
     # 【修改点】根据命令行参数决定是并行还是顺序执行
-    if len(input_files) > 1 and not args.sequential:
-        # 默认行为：并行处理
+    if len(input_files) > 1 and args.parallel:
+        # 默认行为：串行处理
         num_processes = min(MAX_PROCESSES, cpu_count() or 1)
         print(f"使用 {num_processes} 个进程并行测试...")
         with Pool(processes=num_processes) as pool:
             results = pool.map(run_single_test, input_files)
     else:
-        # 顺序执行（当只有一个文件或指定了 --sequential 时）
+        # 并行执行（当只有一个文件或指定了 --sequential 时）
         if len(input_files) > 1:
             print("按顺序执行测试...")
         for file_path in input_files:
@@ -215,9 +215,9 @@ if __name__ == "__main__":
     )
     # 【修改点】增加 --sequential 参数
     parser.add_argument(
-        '--sequential',
+        '--parallel',
         action='store_true',
-        help='如果设置此项，则按顺序执行测试，而不是并行执行。'
+        help='如果设置此项，则按并行执行测试'
     )
     
     args = parser.parse_args()

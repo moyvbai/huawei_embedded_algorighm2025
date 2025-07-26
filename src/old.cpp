@@ -40,16 +40,16 @@ struct NPU {
 };
 
 struct User {
-    int id; // 用户id
+    int id; // ???id
     int s, e, cnt;
     int a, b;
 
-    /*根据显存计算batch size*/
+    /*??????????batch size*/
     int calculate_batch(int mem) const {
         return std::max(0, (mem - b) / a);
     };
 
-    /*根据batch size计算memory*/
+    /*????batch size????memory*/
     int calculate_memory(int batch_size) const {
         return batch_size * a + b;
     }
@@ -107,7 +107,7 @@ public:
 
 
 // ===================================================================
-// START: NPU相关基类定义
+// START: NPU????????
 // ===================================================================
 
 struct NpuSimulationResult {
@@ -124,16 +124,16 @@ class NPUSimulateModule {
 public:
 
     virtual ~NPUSimulateModule() = default;
-    /*模块命名*/
+    /*???????*/
     virtual std::string name() const = 0;
-    /*传入npu实例和分配的用户，返回模拟结果*/
+    /*????npu???????????????????????*/
     virtual NpuSimulationResult run(const NPU& npu, const ProblemData& data, 
         const std::vector<int>& assigned_users) const = 0;
 
 };
 
 
-/*根据用户情况自动分配时间块*/
+/*?????????????????????*/
 class NPUAutoTimeBlockModule: public NPUSimulateModule {
 public:
     std::string name() const override { return "NPUAutoTimeBlockModule"; }
@@ -141,14 +141,14 @@ public:
         const std::vector<int>& assigned_users) const override {
         // LOG("%s module is running!", name().c_str());
 
-        // 一些数据相关的定义
+        // ?Щ???????????
         int M = data.m_users, N = data.n_servers, memory = npu.memory;
         int max_time = 6e4, server_id = npu.server_id, npu_id = npu.npu_id;
         
         const std::vector<User>& users = data.users;
         const std::vector<std::vector<int>>& latency = data.latency;
 
-        // 定义返回结果，并重命名
+        // ???巵??????????????
         NpuSimulationResult result;
         auto& schedules = result.schedules; 
         auto& completed_users = result.completed_users;
@@ -161,7 +161,7 @@ public:
         schedules.resize(M + 1);
         finish_time = 0;
 
-        // 定义一些模拟过程中需要记录的信息
+        // ?????Щ???????????????????
         using user_prior = int;
         using pii = std::pair<int, int>;
         using pri = std::pair<user_prior, int>;
@@ -170,10 +170,10 @@ public:
         std::priority_queue<pri, std::vector<pri>, std::greater<pri> > available_users; // (priority, user_id)
 
 
-        // 定义一些功能性函数
+        // ?????Щ?????????
         
         
-        /*假设剩余请求都按照batch的形式发送，预计的处理时间*/
+        /*??????????????batch????????????????????*/
         auto calculate_handle_time = [&](int user_id, int batch_size) {
             int batch_handle_time = npu.calculate_time(batch_size);
             int cnt = remaining_samples[user_id] / batch_size;
@@ -187,17 +187,22 @@ public:
             return process_time;
         };
 
-        /*计算当前用户的优先级*/
+        /*???????????????*/
         auto calculate_priority = [&](int time, int user_id) -> user_prior {
+            int A = users[user_id].a, B = users[user_id].b;
             int max_batch_size = users[user_id].calculate_batch(memory);
             int handle_time = calculate_handle_time(user_id, max_batch_size);
             int free_time = users[user_id].e - time;
+            int max_block_count = memory / (2 * B);
+            int block_time = npu.calculate_time((memory / max_block_count - B) / A);
+            int batch_size = (npu.k * block_time) * (npu.k * block_time);
             // return 100 * free_time / handle_time;
-            return users[user_id].e - 3 * calculate_handle_time(user_id, max_batch_size) / 2;
+            // return remaining_samples[user_id];
+            return users[user_id].e - calculate_handle_time(user_id, batch_size);
         };
 
         
-        /*每毫秒开始，维护能发送的用户*/
+        /*????????????????????*/
         auto update_avaliable_users = [&](int time) {
             while (!waiting_users.empty() && waiting_users.top().first <= time) {
                 int user_id = waiting_users.top().second;
@@ -206,7 +211,7 @@ public:
             }
         };
 
-        /*更新显存占用*/
+        /*??????????*/
         auto update_memory = [&](int time, int user_id, int batch_size) {
             int handle_time = npu.calculate_time(batch_size);
             for (int i = time; i < time + handle_time; i ++) {
@@ -214,7 +219,7 @@ public:
             }
         };
 
-        /*在time时刻发送batch_size，并更新相关信息*/
+        /*??time??????batch_size??????????????*/
         auto send = [&](int time, int user_id, int batch_size) {
             int send_time = time - latency[server_id][user_id];
             schedules[user_id].push_back({send_time, server_id, npu_id, batch_size});
@@ -232,7 +237,7 @@ public:
             update_memory(time, user_id, batch_size);
         };
 
-        /*判断能够在某一个时间节点发送一个batch size*/
+        /*?ж????????????????????batch size*/
         auto can_send = [&](int time, int user_id, int batch) {
             if (batch <= 0) return false;
             if (remaining_send_count[user_id] <= 0) return false;
@@ -243,7 +248,7 @@ public:
             return time + 1 * process_time <= users[user_id].e;
         };
 
-        /*在某个时间节点的发送策略*/
+        /*?????????????????*/
         auto send_strategy = [&](int time) {
             while (!available_users.empty()) {
                 int user_id = available_users.top().second; 
@@ -253,20 +258,19 @@ public:
 
                 if (free_batch_size <= 0) {
                     waiting_users.push({time, user_id}); 
-                    continue;
-                    // break;
+                    // continue;
+                    break;
                 }
                 
                 
 
-                if (finish_time <= time) { // 对于优先级最高的用户
-                    // 枚举时间块
+                if (finish_time <= time) { // ????????????????
+                    // ???????
                     int A = users[user_id].a, B = users[user_id].b;
-                    int max_block_count = memory / (2 * B) + 1, max_block_time = npu.calculate_time(max_batch_size);
-                    int cnt = std::min((int)available_users.size() + 1, max_block_count);
-                    int min_block_time = npu.calculate_time((memory / cnt - B) / A);
+                    int max_block_count = memory / (2 * B), max_block_time = npu.calculate_time(max_batch_size);
+                    int min_block_time = npu.calculate_time((memory / max_block_count - B) / A);
                     
-                    // if (available_users.size() <= 2) min_block_time = max_block_time;
+                    if (available_users.size() == 0) min_block_time = max_block_time - 1;
 
                     int best_batch_size = 1, best_block_time = 1;
                     double best_util = 0;
@@ -290,7 +294,7 @@ public:
                         finish_time = time + best_block_time;
                     }
                     
-                } else { // 对于剩余需要填块的用户
+                } else { // ?????????????????
                     int remaining_time = finish_time - time;
                     int max_send_batch_size = (remaining_time * npu.k) * (remaining_time * npu.k);
                     int batch_size = std::min(remaining_samples[user_id], max_send_batch_size);
@@ -309,7 +313,7 @@ public:
         };
         
         
-        // 模拟前的初始化
+        // ??????????
         for (auto& user_id: assigned_users) {
             remaining_samples[user_id] = data.users[user_id].cnt;
         }
@@ -317,14 +321,14 @@ public:
             waiting_users.push({data.users[user_id].s + data.latency[server_id][user_id], user_id});
         }
 
-        // 开始进行模拟
+        // ??????????
         for (int time = 0; time <= max_time; time ++) {
             // LOG("current time: %d", time);
             update_avaliable_users(time);
             send_strategy(time);
         }
 
-        // 统计超时用户
+        // ????????
         for(auto& v : remaining_samples) {
             timeout_users.push_back(v.first);
         }
@@ -336,7 +340,7 @@ public:
 
 
 // ===================================================================
-// Iterator相关基类定义
+// Iterator????????
 // ===================================================================
 
 
@@ -346,7 +350,7 @@ struct IteratorResult {
     std::vector<std::vector<NpuSimulationResult> > simulate_results;
 };
 
-/*迭代模块的基类*/
+/*???????????*/
 class IteratorModule {
 public:
     virtual ~IteratorModule() = default;
@@ -354,8 +358,8 @@ public:
     virtual IteratorResult run(const ProblemData& data, const NPUSimulateModule& simulator) const = 0;
 };
 
-/*暴力迭代，对于每个超时用户，在所有npu中都进行检测是否能够放入，
-迭代多轮
+/*???????????????????????????????npu?ж????м????????????
+????????
 */
 class BruteIteratorModule: public IteratorModule {
 public:
@@ -448,7 +452,7 @@ public:
 
 
 // ===================================================================
-// TimeoutHandle相关基类定义
+// TimeoutHandle????????
 // ===================================================================
 
 struct SolverResult {
@@ -456,7 +460,7 @@ struct SolverResult {
     int completed_user_count = 0; 
 };
 
-/*超时用户处理模块的基类*/
+/*?????????????????*/
 class TimeoutHandlerModule {
 public:
     virtual ~TimeoutHandlerModule() = default;
@@ -469,18 +473,18 @@ class AutoTimeBlockHandlerModule: public TimeoutHandlerModule {
 public:
     std::string name() const override { return "AutoTimeBlockHandlerModule"; }
     
-    // 对于超时用户的处理，
+    // ????????????????
     void simulate(const NPU& npu, const ProblemData& data, 
         std::vector<int>& assigned_users, NpuSimulationResult& result) const {
         LOG("%s module is running!", name().c_str());
-        // 一些数据相关的定义
+        // ?Щ???????????
         int M = data.m_users, N = data.n_servers, memory = npu.memory;;
-        int max_time = 5e5, server_id = npu.server_id, npu_id = npu.npu_id;
+        int max_time = 1e6, server_id = npu.server_id, npu_id = npu.npu_id;
     
         auto& users = data.users;
         auto& latency = data.latency;
 
-        // 复用之前的模拟结果
+        // ?????????????
         auto& schedules = result.schedules; 
         std::vector<int>& completed_users = result.completed_users;
         std::vector<int>& timeout_users = result.timeout_users;
@@ -490,13 +494,13 @@ public:
         schedules.resize(M + 1);
         int& finish_time = result.finish_time;
 
-        // 定义一些模拟过程中需要记录的信息
+        // ?????Щ???????????????????
         std::vector<int> remaining_send_count(M + 1, 300);
         std::priority_queue<arr2, std::vector<arr2>, std::greater<arr2>> waiting_users; // (time, user_id)
         std::priority_queue<arr2, std::vector<arr2>, std::greater<arr2>> available_users; // (priority, user_id)
 
 
-        // 定义一些功能性函数
+        // ?????Щ?????????
         
         auto calculate_handle_time = [&](int user_id, int batch_size) {
             int batch_handle_time = npu.calculate_time(batch_size);
@@ -510,7 +514,7 @@ public:
             }
             return process_time;
         };
-        // 每毫秒开始，维护能发送的用户
+        // ????????????????????
         auto avaliable_users_update = [&](int time) {
             while (!waiting_users.empty() && waiting_users.top()[0] <= time) {
                 int user_id = waiting_users.top()[1];
@@ -527,7 +531,7 @@ public:
             }
         };
 
-        // 发送后对剩余数量，剩余发送次数，下次能发送时间更新
+        // ???????????????????????????????????????
         auto send_update = [&](int time, int user_id, int batch_size) {
             int send_time = time - latency[server_id][user_id];
             schedules[user_id].push_back({send_time, server_id, npu_id, batch_size});
@@ -545,7 +549,7 @@ public:
             memory_update(time, user_id, batch_size);
         };
 
-        // 判断能够在某一个时间节点发送一个batch size
+        // ?ж????????????????????batch size
         auto can_send = [&](int time, int user_id, int batch) {
             if (batch <= 0) return false;
             if (remaining_send_count[user_id] <= 0) return false;
@@ -554,7 +558,7 @@ public:
             return true;
         };
 
-        // 在某个时间节点的发送策略
+        // ?????????????????
         auto send_strategy = [&](int time) {
             // LOG("send strategy begin");
             while (!available_users.empty()) {
@@ -565,8 +569,8 @@ public:
                 int free_batch_size = (memory - memory_usage[time] - B) / A;
                 int max_batch_size = (memory - B) / A;
 
-                if (finish_time <= time) { // 对于优先级最高的用户
-                    // 枚举时间块
+                if (finish_time <= time) { // ????????????????
+                    // ???????
                     int max_block_time = npu.calculate_time(max_batch_size);
                     int min_block_time = 1;
                     if (available_users.size() <= 0) min_block_time = max_block_time;
@@ -593,7 +597,7 @@ public:
                         finish_time = time + best_block_time;
                     }
                     
-                } else { // 对于剩余需要填块的用户
+                } else { // ?????????????????
                     int remaining_time = finish_time - time;
                     int max_send_batch_size = (remaining_time * npu.k) * (remaining_time * npu.k);
                     int batch_size = std::min(remaining_samples[user_id], max_send_batch_size);
@@ -612,7 +616,7 @@ public:
         };
         
         
-        // 模拟前的初始化
+        // ??????????
         for (auto& user_id: assigned_users) {
             remaining_samples[user_id] = data.users[user_id].cnt;
         }
@@ -620,17 +624,17 @@ public:
             waiting_users.push({data.users[user_id].s + data.latency[server_id][user_id], user_id});
         }
 
-        // 开始进行模拟
+        // ??????????
         for (int time = finish_time; time <= max_time; time ++) {
             // LOG("current time: %d", time);
             if (available_users.size() == 0 and waiting_users.size() == 0) break;
-            // 更新可发送用户
+            // ???????????
             avaliable_users_update(time);
 
             send_strategy(time);
         }
 
-        // 统计超时用户
+        // ????????
         for(auto& v : remaining_samples) {
             timeout_users.push_back(v.first);
         }
@@ -640,10 +644,10 @@ public:
     
     SolverResult run(const ProblemData& data, IteratorResult& iteratorResult) const override {
         LOG("%s module is running!", name().c_str());
-        // 对于超时用户的分配
-        // 按照装入最大bathsiz的情况作为标准，令总的结束时间最短
+        // ??????????????
+        // ??????????bathsiz???????????????????????????
         
-        // 先定义好以后信息
+        // ????????????
         auto& npus = data.npus;
         auto& simulate_users = iteratorResult.simulate_users ;
         auto& simulate_results = iteratorResult.simulate_results;       
@@ -712,7 +716,7 @@ public:
 
 
 // ===================================================================
-// Solver相关基类定义
+// Solver????????
 // ===================================================================
 
 class Solver {
@@ -794,11 +798,11 @@ int main() {
     for (const auto& solver : solvers) {
         LOG("--- Running Solver: %s ---", solver->name().c_str());
         SolverResult result = solver->solve(data);
-        // **注意: 使用新的变量名**
+        // **???: ???????????**
         LOG("--- [Result] Solver: %s | Predicted Completed Users: %d ---", 
             solver->name().c_str(), result.completed_user_count);
 
-        // **注意: 使用新的变量名**
+        // **???: ???????????**
         if (result.completed_user_count > max_completed_users) {
             LOG("!!! New Best Solution Found! Previous best: %d users.", max_completed_users);
             max_completed_users = result.completed_user_count;
@@ -810,7 +814,7 @@ int main() {
     LOG("==============================================");
     LOG("Competition Finished!");
     LOG("Best Solver (by fast prediction): %s", best_solver_name.c_str());
-    // **注意: 使用新的变量名**
+    // **???: ???????????**
     LOG("Predicted Max Completed Users: %d", max_completed_users);
     LOG("==============================================");
 

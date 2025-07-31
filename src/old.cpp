@@ -40,16 +40,16 @@ struct NPU {
 };
 
 struct User {
-    int id; // ???id
+    int id; // ??id
     int s, e, cnt;
     int a, b;
 
-    /*??????????batch size*/
+    /*??????batch size*/
     int calculate_batch(int mem) const {
         return std::max(0, (mem - b) / a);
     };
 
-    /*????batch size????memory*/
+    /*??batch size??memory*/
     int calculate_memory(int batch_size) const {
         return batch_size * a + b;
     }
@@ -107,7 +107,7 @@ public:
 
 
 // ===================================================================
-// START: NPU????????
+// START: NPU??????
 // ===================================================================
 
 struct NpuSimulationResult {
@@ -124,31 +124,31 @@ class NPUSimulateModule {
 public:
 
     virtual ~NPUSimulateModule() = default;
-    /*???????*/
+    /*????*/
     virtual std::string name() const = 0;
-    /*????npu???????????????????????*/
+    /*??npu???????????????*/
     virtual NpuSimulationResult run(const NPU& npu, const ProblemData& data, 
         const std::vector<int>& assigned_users) const = 0;
 
 };
 
 
-/*?????????????????????*/
+/*?????????????*/
 class NPUAutoTimeBlockModule: public NPUSimulateModule {
 public:
     std::string name() const override { return "NPUAutoTimeBlockModule"; }
     NpuSimulationResult run(const NPU& npu, const ProblemData& data, 
         const std::vector<int>& assigned_users) const override {
-        // LOG("%s module is running!", name().c_str());
+        LOG("%s module is running!", name().c_str());
 
-        // ?????????????
+        // ?????????
         int M = data.m_users, N = data.n_servers, memory = npu.memory;
         int max_time = 6e4, server_id = npu.server_id, npu_id = npu.npu_id;
         
         const std::vector<User>& users = data.users;
         const std::vector<std::vector<int>>& latency = data.latency;
 
-        // ??????????????????
+        // ???????????
         NpuSimulationResult result;
         auto& schedules = result.schedules; 
         auto& completed_users = result.completed_users;
@@ -161,7 +161,7 @@ public:
         schedules.resize(M + 1);
         finish_time = 0;
 
-        // ?????????????????????????
+        // ????????????????
         using user_prior = int;
         using pii = std::pair<int, int>;
         using pri = std::pair<user_prior, int>;
@@ -170,10 +170,10 @@ public:
         std::priority_queue<pri, std::vector<pri>, std::greater<pri> > available_users; // (priority, user_id)
 
 
-        // ???????????????
+        // ?????????
         
         
-        /*???????????????batch????????????????????*/
+        /*?????????batch?????????????*/
         auto calculate_handle_time = [&](int user_id, int batch_size) {
             int batch_handle_time = npu.calculate_time(batch_size);
             int cnt = remaining_samples[user_id] / batch_size;
@@ -187,7 +187,7 @@ public:
             return process_time;
         };
 
-        /*???????????????*/
+        /*??????????*/
         auto calculate_priority = [&](int time, int user_id) -> user_prior {
             int A = users[user_id].a, B = users[user_id].b;
             int max_batch_size = users[user_id].calculate_batch(memory);
@@ -202,7 +202,7 @@ public:
         };
 
         
-        /*????????????????????*/
+        /*??????????????*/
         auto update_avaliable_users = [&](int time) {
             while (!waiting_users.empty() && waiting_users.top().first <= time) {
                 int user_id = waiting_users.top().second;
@@ -211,7 +211,7 @@ public:
             }
         };
 
-        /*??????????*/
+        /*??????*/
         auto update_memory = [&](int time, int user_id, int batch_size) {
             int handle_time = npu.calculate_time(batch_size);
             for (int i = time; i < time + handle_time; i ++) {
@@ -219,7 +219,7 @@ public:
             }
         };
 
-        /*??time??????batch_size??????????????*/
+        /*?time????batch_size????????*/
         auto send = [&](int time, int user_id, int batch_size) {
             int send_time = time - latency[server_id][user_id];
             schedules[user_id].push_back({send_time, server_id, npu_id, batch_size});
@@ -227,61 +227,95 @@ public:
             remaining_send_count[user_id] -= 1;
             int handle_time = npu.calculate_time(batch_size);
             if (remaining_samples[user_id] <= 0) {
+                // LOG("send over, time:%d, user: %d, batch: %d, remain: %d", time, user_id, batch_size, remaining_samples[user_id]); 
+                
                 if (time + handle_time <= users[user_id].e) {
                     completed_users.push_back(user_id);
                     remaining_samples.erase(user_id);
                 }
             } else {
+                // LOG("remain, time:%d, user: %d, batch: %d, remain: %d", time, user_id, batch_size, remaining_samples[user_id]);
                 waiting_users.push({time + latency[server_id][user_id] + 1, user_id});
             }
             update_memory(time, user_id, batch_size);
         };
 
-        /*??????????????????????batch size*/
+        /*????????????????batch size*/
         auto can_send = [&](int time, int user_id, int batch) {
             if (batch <= 0) return false;
             if (remaining_send_count[user_id] <= 0) return false;
             int max_batch_size = (memory - users[user_id].b) / users[user_id].a;
+            if (remaining_samples[user_id] > remaining_send_count[user_id] * batch) return false;
             if (remaining_samples[user_id] - batch > (remaining_send_count[user_id] - 1) * max_batch_size) return false;
             int batch_handle_time = npu.calculate_time(batch);
             int process_time = calculate_handle_time(user_id, batch);
             return time + 1 * process_time <= users[user_id].e;
+            // return true;
         };
 
-        /*?????????????????*/
+        /*???????????block_time?????????batchsize??*/
+        auto simulate = [&](int time, int block_time) {
+            std::vector<pri> tmp_users;
+            int free_memory = memory, used_batch = 0;
+            while (!available_users.empty()) {
+                if (free_memory < 110) break;
+                int user_id = available_users.top().second;
+                tmp_users.push_back(available_users.top());
+                available_users.pop();
+                
+                int batch_size = (block_time * npu.k) * (block_time * npu.k);
+                int free_batch_size = users[user_id].calculate_batch(free_memory);
+                if (free_batch_size == 0) continue;
+                batch_size = std::min(batch_size, free_batch_size);
+                batch_size = std::min(batch_size, remaining_samples[user_id]);
+                
+                if (can_send(time, user_id, batch_size)) {
+                    used_batch += batch_size;
+                    free_memory -= users[user_id].calculate_memory(batch_size);
+                } else {
+                    continue;
+                }
+            }
+
+            for(auto&v: tmp_users) {
+                available_users.push(v);
+            }
+            return used_batch;
+        };
+
+        /*????????????*/
         auto send_strategy = [&](int time) {
             while (!available_users.empty()) {
                 int user_id = available_users.top().second; 
-                available_users.pop();
+                int free_memory = memory - memory_usage[time];
                 int max_batch_size = users[user_id].calculate_batch(memory);
-                int free_batch_size = users[user_id].calculate_batch(memory - memory_usage[time]);
-
-                if (free_batch_size <= 0) {
+                int free_batch_size = users[user_id].calculate_batch(free_memory);
+                
+                if (free_memory < 110) {
+                    available_users.pop();
                     waiting_users.push({time, user_id}); 
-                    // continue;
                     break;
+                } else if (free_batch_size <= 0) {
+                    available_users.pop();
+                    waiting_users.push({time, user_id}); 
+                    continue;
                 }
                 
-                
+                if (finish_time <= time) { // ??????????
+                    int max_block_time = npu.calculate_time(max_batch_size);
+                    int min_block_time = 1;
+                    int best_block_time = 1, best_batch_size = 1;
+                    double best_util = 0.0;
 
-                if (finish_time <= time) { // ????????????????
-                    // ö??????
-                    int A = users[user_id].a, B = users[user_id].b;
-                    int max_block_count = memory / (2 * B), max_block_time = npu.calculate_time(max_batch_size);
-                    int min_block_time = npu.calculate_time((memory / max_block_count - B) / A);
-                    
                     if (available_users.size() == 0) min_block_time = max_block_time - 1;
-
-                    int best_batch_size = 1, best_block_time = 1;
-                    double best_util = 0;
-                
+                    
                     for (int block_time = min_block_time; block_time <= max_block_time; block_time ++) {
                         int batch_size = (block_time * npu.k) * (block_time * npu.k);
                         batch_size = std::min(batch_size, free_batch_size);
                         batch_size = std::min(batch_size, remaining_samples[user_id]);
-                        int handle_time = npu.calculate_time(batch_size);
                         if (can_send(time, user_id, batch_size)) {
-                            double util = batch_size * 100.0 / handle_time / (A * batch_size + B);
+                            double util = simulate(time, block_time);
+                            util /= block_time;
                             if (util > best_util) {
                                 best_util = util; 
                                 best_batch_size = batch_size;
@@ -289,22 +323,27 @@ public:
                             }
                         }
                     }
+
+                    available_users.pop();
                     if (can_send(time, user_id, best_batch_size)) {
                         send(time, user_id, best_batch_size);
                         finish_time = time + best_block_time;
                     }
-                    
-                } else { // ?????????????????
+
+
+                } else { // ???????????
                     int remaining_time = finish_time - time;
-                    int max_send_batch_size = (remaining_time * npu.k) * (remaining_time * npu.k);
-                    int batch_size = std::min(remaining_samples[user_id], max_send_batch_size);
+                    int batch_size = (remaining_time * npu.k) * (remaining_time * npu.k);
+                    batch_size = std::min(remaining_samples[user_id], batch_size);
                     batch_size = std::min(batch_size, free_batch_size);
 
+                    available_users.pop();
                     if (can_send(time, user_id, batch_size)) {
                         send(time, user_id, batch_size);
                     } else {
                         waiting_users.push({time, user_id}); 
                     }
+
                 }
 
             }
@@ -313,7 +352,7 @@ public:
         };
         
         
-        // ??????????
+        // ???????
         for (auto& user_id: assigned_users) {
             remaining_samples[user_id] = data.users[user_id].cnt;
         }
@@ -321,17 +360,19 @@ public:
             waiting_users.push({data.users[user_id].s + data.latency[server_id][user_id], user_id});
         }
 
-        // ??????????
+        // ??????
         for (int time = 0; time <= max_time; time ++) {
             // LOG("current time: %d", time);
             update_avaliable_users(time);
             send_strategy(time);
         }
 
-        // ????????
+        // ??????
         for(auto& v : remaining_samples) {
             timeout_users.push_back(v.first);
         }
+
+        LOG("simulate users count:%d, timeout users count: %d", assigned_users.size(), timeout_users.size());
         return result;
 
     }
@@ -340,7 +381,7 @@ public:
 
 
 // ===================================================================
-// Iterator????????
+// Iterator??????
 // ===================================================================
 
 
@@ -350,7 +391,7 @@ struct IteratorResult {
     std::vector<std::vector<NpuSimulationResult> > simulate_results;
 };
 
-/*???????????*/
+/*???????*/
 class IteratorModule {
 public:
     virtual ~IteratorModule() = default;
@@ -358,8 +399,8 @@ public:
     virtual IteratorResult run(const ProblemData& data, const NPUSimulateModule& simulator) const = 0;
 };
 
-/*???????????????????????????????npu???????????????????
-????????
+/*?????????????????npu?????????????
+????
 */
 class BruteIteratorModule: public IteratorModule {
 public:
@@ -393,14 +434,14 @@ public:
 
         LOG("begin iter");
         auto program_start_time = std::chrono::steady_clock::now();
-        int round = 4;
+        int round = 1;
         std::vector<int> r = {1, 1, 1, 1, 1};
         while (round --) {
             LOG("round %d is running", round);
             std::vector<int> new_timeout_users;
             int idx = 0, sz = timeout_users.size();
             int success_count = 0;
-            int max_try_users_count = 500;
+            int max_try_users_count = 300;
             while (idx < sz) {
                 bool assign_success = false;
                 auto program_current_time = std::chrono::steady_clock::now();
@@ -431,7 +472,7 @@ public:
 
                 if (assign_success) idx += max_try_users_count;
                 else {
-                    max_try_users_count = std::max(r[round], max_try_users_count / 2);
+                    max_try_users_count = std::max(r[round], max_try_users_count * 2 / 3);
                 }
             }
             
@@ -452,7 +493,7 @@ public:
 
 
 // ===================================================================
-// TimeoutHandle????????
+// TimeoutHandle??????
 // ===================================================================
 
 struct SolverResult {
@@ -460,7 +501,7 @@ struct SolverResult {
     int completed_user_count = 0; 
 };
 
-/*?????????????????*/
+/*???????????*/
 class TimeoutHandlerModule {
 public:
     virtual ~TimeoutHandlerModule() = default;
@@ -473,18 +514,18 @@ class AutoTimeBlockHandlerModule: public TimeoutHandlerModule {
 public:
     std::string name() const override { return "AutoTimeBlockHandlerModule"; }
     
-    // ????????????????
+    // ??????????
     void simulate(const NPU& npu, const ProblemData& data, 
         std::vector<int>& assigned_users, NpuSimulationResult& result) const {
         LOG("%s module is running!", name().c_str());
-        // ?????????????
+        // ?????????
         int M = data.m_users, N = data.n_servers, memory = npu.memory;;
         int max_time = 1e6, server_id = npu.server_id, npu_id = npu.npu_id;
     
         auto& users = data.users;
         auto& latency = data.latency;
 
-        // ?????????????
+        // ?????????
         auto& schedules = result.schedules; 
         std::vector<int>& completed_users = result.completed_users;
         std::vector<int>& timeout_users = result.timeout_users;
@@ -494,13 +535,13 @@ public:
         schedules.resize(M + 1);
         int& finish_time = result.finish_time;
 
-        // ?????????????????????????
+        // ????????????????
         std::vector<int> remaining_send_count(M + 1, 300);
         std::priority_queue<arr2, std::vector<arr2>, std::greater<arr2>> waiting_users; // (time, user_id)
         std::priority_queue<arr2, std::vector<arr2>, std::greater<arr2>> available_users; // (priority, user_id)
 
 
-        // ???????????????
+        // ?????????
         
         auto calculate_handle_time = [&](int user_id, int batch_size) {
             int batch_handle_time = npu.calculate_time(batch_size);
@@ -514,7 +555,7 @@ public:
             }
             return process_time;
         };
-        // ????????????????????
+        // ??????????????
         auto avaliable_users_update = [&](int time) {
             while (!waiting_users.empty() && waiting_users.top()[0] <= time) {
                 int user_id = waiting_users.top()[1];
@@ -531,7 +572,7 @@ public:
             }
         };
 
-        // ??????????????????????????´????????????
+        // ?????????????????????????
         auto send_update = [&](int time, int user_id, int batch_size) {
             int send_time = time - latency[server_id][user_id];
             schedules[user_id].push_back({send_time, server_id, npu_id, batch_size});
@@ -549,7 +590,7 @@ public:
             memory_update(time, user_id, batch_size);
         };
 
-        // ??????????????????????batch size
+        // ????????????????batch size
         auto can_send = [&](int time, int user_id, int batch) {
             if (batch <= 0) return false;
             if (remaining_send_count[user_id] <= 0) return false;
@@ -558,7 +599,7 @@ public:
             return true;
         };
 
-        // ?????????????????
+        // ????????????
         auto send_strategy = [&](int time) {
             // LOG("send strategy begin");
             while (!available_users.empty()) {
@@ -569,8 +610,8 @@ public:
                 int free_batch_size = (memory - memory_usage[time] - B) / A;
                 int max_batch_size = (memory - B) / A;
 
-                if (finish_time <= time) { // ????????????????
-                    // ö??????
+                if (finish_time <= time) { // ??????????
+                    // ?????
                     int max_block_time = npu.calculate_time(max_batch_size);
                     int min_block_time = 1;
                     if (available_users.size() <= 0) min_block_time = max_block_time;
@@ -597,7 +638,7 @@ public:
                         finish_time = time + best_block_time;
                     }
                     
-                } else { // ?????????????????
+                } else { // ???????????
                     int remaining_time = finish_time - time;
                     int max_send_batch_size = (remaining_time * npu.k) * (remaining_time * npu.k);
                     int batch_size = std::min(remaining_samples[user_id], max_send_batch_size);
@@ -616,7 +657,7 @@ public:
         };
         
         
-        // ??????????
+        // ???????
         for (auto& user_id: assigned_users) {
             remaining_samples[user_id] = data.users[user_id].cnt;
         }
@@ -624,17 +665,17 @@ public:
             waiting_users.push({data.users[user_id].s + data.latency[server_id][user_id], user_id});
         }
 
-        // ??????????
+        // ??????
         for (int time = finish_time; time <= max_time; time ++) {
             // LOG("current time: %d", time);
             if (available_users.size() == 0 and waiting_users.size() == 0) break;
-            // ???????????
+            // ???????
             avaliable_users_update(time);
 
             send_strategy(time);
         }
 
-        // ????????
+        // ??????
         for(auto& v : remaining_samples) {
             timeout_users.push_back(v.first);
         }
@@ -644,10 +685,10 @@ public:
     
     SolverResult run(const ProblemData& data, IteratorResult& iteratorResult) const override {
         LOG("%s module is running!", name().c_str());
-        // ??????????????
-        // ??????????bathsiz?????????????????¥?????????
+        // ?????????
+        // ??????bathsiz?????????????????
         
-        // ????????????
+        // ????????
         auto& npus = data.npus;
         auto& simulate_users = iteratorResult.simulate_users ;
         auto& simulate_results = iteratorResult.simulate_results;       
@@ -716,7 +757,7 @@ public:
 
 
 // ===================================================================
-// Solver????????
+// Solver??????
 // ===================================================================
 
 class Solver {
@@ -798,11 +839,11 @@ int main() {
     for (const auto& solver : solvers) {
         LOG("--- Running Solver: %s ---", solver->name().c_str());
         SolverResult result = solver->solve(data);
-        // **???: ???????????**
+        // **??: ???????**
         LOG("--- [Result] Solver: %s | Predicted Completed Users: %d ---", 
             solver->name().c_str(), result.completed_user_count);
 
-        // **???: ???????????**
+        // **??: ???????**
         if (result.completed_user_count > max_completed_users) {
             LOG("!!! New Best Solution Found! Previous best: %d users.", max_completed_users);
             max_completed_users = result.completed_user_count;
@@ -814,7 +855,7 @@ int main() {
     LOG("==============================================");
     LOG("Competition Finished!");
     LOG("Best Solver (by fast prediction): %s", best_solver_name.c_str());
-    // **???: ???????????**
+    // **??: ???????**
     LOG("Predicted Max Completed Users: %d", max_completed_users);
     LOG("==============================================");
 

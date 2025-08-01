@@ -166,9 +166,9 @@ public:
         using pii = std::pair<int, int>;
         using pri = std::pair<user_prior, int>;
         std::vector<int> remaining_send_count(M + 1, 300);
-        std::vector<int> max_batch_size(M + 1, 1); // 每个用户的最大的batch size
-        std::set<pii> waiting_users; // (time, user_id)
-        std::set<pri> available_users; // (priority, user_id)
+        
+        std::priority_queue<pii, std::vector<pii>, std::greater<pii> > waiting_users; // (time, user_id)
+        std::priority_queue<pri, std::vector<pri>, std::greater<pri> > available_users; // (priority, user_id)
 
 
         // 定义一些功能性函数
@@ -191,20 +191,18 @@ public:
         /*计算当前用户的优先级*/
         auto calculate_priority = [&](int time, int user_id) -> user_prior {
             int A = users[user_id].a, B = users[user_id].b;
-            int batch_size = B / A;
-            int block_time = npu.calculate_time(batch_size);
-            batch_size = (npu.k * block_time) * (npu.k * block_time);
-            assert(batch_size == 16);
+            int block_time = npu.calculate_time(B / A);
+            int batch_size = (npu.k * block_time) * (npu.k * block_time);
             return users[user_id].e - calculate_handle_time(user_id, remaining_samples[user_id], batch_size);
         };
 
         
         /*每毫秒开始，维护能发送的用户*/
         auto update_avaliable_users = [&](int time) {
-            while (!waiting_users.empty() && waiting_users.begin()->first <= time) {
-                int user_id = waiting_users.begin()->second;
-                waiting_users.erase(waiting_users.begin());
-                available_users.insert({calculate_priority(time, user_id), user_id});
+            while (!waiting_users.empty() && waiting_users.top().first <= time) {
+                int user_id = waiting_users.top().second;
+                waiting_users.pop();
+                available_users.push({calculate_priority(time, user_id), user_id});
             }
         };
 
@@ -229,105 +227,180 @@ public:
                     remaining_samples.erase(user_id);
                 }
             } else {
-                waiting_users.insert({time + latency[server_id][user_id] + 1, user_id});
+                waiting_users.push({time + latency[server_id][user_id] + 1, user_id});
             }
             update_memory(time, user_id, batch_size);
         };
 
         /*判断能够在某一个时间节点发送一个batch size*/
-        // auto can_send = [&](int time, int user_id, int batch) {
-        //     if (batch <= 0) return false;
-        //     if (remaining_send_count[user_id] <= 0) return false;
-        //     int remaining_count = remaining_samples[user_id] - batch;
-        //     if (remaining_count > (remaining_send_count[user_id] - 1) * max_batch_size[user_id]) return false;
-        //     int process_time = calculate_handle_time(user_id, remaining_count, max_batch_size[user_id]);
-        //     return time + latency[server_id][user_id] + process_time <= users[user_id].e;
-        // };
-
+        // 优先级最高的用户
         auto can_send = [&](int time, int user_id, int batch) {
             if (batch <= 0) return false;
             if (remaining_send_count[user_id] <= 0) return false;
             if (remaining_samples[user_id] > remaining_send_count[user_id] * batch) return false;
-            int process_time = calculate_handle_time(user_id, remaining_samples[user_id], batch);
-            return time + process_time <= users[user_id].e;
+            int process_time = calculate_handle_time(user_id, remaining_samples[user_id] , batch);
+            return time + 1 * process_time <= users[user_id].e;
         };
+
+        auto calculate_can_send_batch = [&](int time, int user_id) {
+            int l = 1, r = users[user_id].calculate_batch(memory);
+            while (l < r) {
+                int mid = (l + r) >> 1;
+                if (can_send(time, user_id, mid)) r = mid;
+                else l = mid + 1; 
+            }
+            return l;
+        };
+
+        auto simulate = [&](int time, int block_time, std::vector<pii>& ans) {
+            // ans的格式为(user_id, batch)
+            ans.clear();
+            std::vector<pii> tmp;
+            int util = 0, have_break = 0;
+
+            int least_memory = 0, extra_memory = 0;
+            while (!available_users.empty()) {
+                int user_id = available_users.top().second;
+                tmp.push_back(available_users.top());
+                available_users.pop();
+
+                int free_memory = memory - least_memory;
+                if (free_memory < 110) break;
+                int free_batch_size = users[user_id].calculate_batch(free_memory);
+                if (free_batch_size <= 0) continue;
+                int time_batch_size = npu.k * npu.k * block_time * block_time;
+                int batch_size = std::min(time_batch_size, free_batch_size);
+                batch_size = std::min(batch_size, remaining_samples[user_id]);
+                if (can_send(time, user_id, batch_size)) {
+
+                    int least_batch_size = calculate_can_send_batch(time, user_id);
+                    
+                    // LOG("user id: %d, least batch size: %d", user_id, least_batch_size);
+                    
+                    least_memory += users[user_id].calculate_memory(least_batch_size);
+                    extra_memory += (batch_size - least_batch_size) * users[user_id].a;
+                    ans.push_back({user_id, least_batch_size});
+                } else {
+                    have_break = 1;
+                    break;
+                }
+
+                if (least_memory + extra_memory >= memory) break;
+            }
+            
+            extra_memory = memory - least_memory;
+            // LOG("least memory: %d, extra memory: %d", least_memory, extra_memory);
+            
+
+            for (int i = 0; i < (int)ans.size(); i ++) {
+                if (extra_memory < 10) break;
+                int user_id = ans[i].first;
+                int time_batch_size = npu.k * npu.k * block_time * block_time;
+                int batch_size = std::min(time_batch_size, remaining_samples[user_id]);
+                int extra_batch_size = std::min(batch_size - ans[i].second, extra_memory / users[user_id].a);
+                ans[i].second += extra_batch_size;
+                extra_memory -= extra_batch_size * users[user_id].a;
+                util += users[user_id].a * ans[i].second;
+            }
+
+            for (auto &v: tmp) {
+                available_users.push(v);
+            }
+            if (have_break) return 1;
+            return util;
+        };
+
 
         /*在某个时间节点的发送策略*/
         auto send_strategy = [&](int time) {
             while (!available_users.empty()) {
-                int user_id = available_users.begin()->second; 
+                int user_id = available_users.top().second; 
                 int free_memory = memory - memory_usage[time];
                 int free_batch_size = users[user_id].calculate_batch(free_memory);
-                assert(free_batch_size >=0);
                 int free_block_time = npu.calculate_time(free_batch_size);
-
+                // LOG("time: %d, free momory: %d", time, free_memory);
                 if (free_memory < 110) break;
-                available_users.erase(available_users.begin());
 
                 if (free_batch_size <= 0) {
-                    waiting_users.insert({time, user_id}); 
+                    available_users.pop();
+                    waiting_users.push({time, user_id}); 
                     continue;
                 }
 
-                if (available_users.size() == 0 and (waiting_users.size() == 0 or waiting_users.begin()->first > time + free_block_time)) {
-                    int batch_size = std::min(free_batch_size, remaining_samples[user_id]);
-                    // LOG("time: %d, ready big block!, can send: %d", time, can_send(time, user_id, batch_size));
-                    if (can_send(time, user_id, batch_size)) {
-                        send(time, user_id, batch_size);
-                        break;
+                if (finish_time <= time) {
+                    std::vector<pii> simulate_result, best_result;
+                    double best_util = 0;
+                    int best_block_time = 0;
+                    for (int block_time = 1; block_time <= free_block_time; block_time ++) {
+                        int time_batch_size = npu.k * npu.k * block_time * block_time;
+                        int batch_size = std::min(time_batch_size, free_batch_size);
+                        batch_size = std::min(batch_size, remaining_samples[user_id]);
+                        if (can_send(time, user_id, batch_size)) {
+                            // LOG("time: %d, user id: %d, block time: %d", time, user_id, block_time);
+                            double util = simulate(time, block_time, simulate_result);
+                            // LOG("time: %d, user id: %d, block time: %d over", time, user_id, block_time);
+                            util /= block_time;
+                            if (util > best_util) {
+                                best_util = util;
+                                best_result = simulate_result;
+                                best_block_time = block_time;
+                            }
+                        }
                     }
-                }
+                    // LOG("best block time: %d", best_block_time);
+                    // LOG("available users count: %d", available_users.size());
+                    finish_time = std::max(finish_time, time + best_block_time);
+                    for (int i = 0; i < (int)best_result.size(); i ++) {
+                        int user_id = best_result[i].first;
+                        int batch_size = best_result[i].second;
+                        send(time, user_id, batch_size);
+                        // LOG("user id: %d, remain count: %d", user_id, remaining_samples[user_id]);
+                        while (available_users.top().second != user_id) {
+                            waiting_users.push({time, available_users.top().second});
+                            available_users.pop();
+                        }
+                        available_users.pop();
+                    }
 
-                bool send_success = false;
-                // 对每个用户遍历每个时间块
-                int A = users[user_id].a, B = users[user_id].b;
-                int min_block_time = npu.calculate_time(B / A);
-                for (int block_time = min_block_time; block_time <= free_block_time; block_time ++) {
-                    int batch_size = (npu.k * block_time) * (npu.k * block_time);
-                    batch_size = std::min(batch_size, remaining_samples[user_id]);
+                    // LOG("send over");
+                    break;
+                } else {
+                    int remaining_time = finish_time - time;
+                    int batch_size = (remaining_time * npu.k) * (remaining_time * npu.k);
+                    batch_size = std::min(remaining_samples[user_id], batch_size);
                     batch_size = std::min(batch_size, free_batch_size);
+
+                    available_users.pop();
                     if (can_send(time, user_id, batch_size)) {
-                        send_success = true;
                         send(time, user_id, batch_size);
-                        // LOG("time: %d, user id: %d, batch size: %d", time, user_id, batch_size);
-                        int handle_time = npu.calculate_time(batch_size);
-                        finish_time = std::max(finish_time, time + handle_time);
-                        break;
+                    } else {
+                        waiting_users.push({time, user_id}); 
                     }
                 }
 
-
-                if (!send_success) {
-                    waiting_users.insert({time, user_id});
-                }
             }
 
             return;
         };
-        
-        
-        // 模拟前的初始化
+
         for (auto& user_id: assigned_users) {
             remaining_samples[user_id] = data.users[user_id].cnt;
-            waiting_users.insert({data.users[user_id].s + data.latency[server_id][user_id], user_id});
-            for (int t = 1; t <= 6; t ++) {
-                int batch_size = npu.k * npu.k * t * t;
-                if (batch_size >= 20) {
-                    max_batch_size[user_id] = batch_size;
-                    break;
-                }
-            }
+            waiting_users.push({data.users[user_id].s + data.latency[server_id][user_id], user_id});
         }
+        
 
         // 开始进行模拟
         for (int time = 0; time <= max_time; time ++) {
+            // LOG("current time: %d", time);
+            if (available_users.size() == 0 and waiting_users.size() == 0) break;
             update_avaliable_users(time);
             send_strategy(time);
         }
 
         // 统计超时用户
         for(auto& v : remaining_samples) {
-            timeout_users.push_back(v.first);
+            // LOG("user id: %d, remain count: %d", v.first, v.second);
+            if (v.second > 0) timeout_users.push_back(v.first);
         }
 
         LOG("simulate users count:%d, timeout users count: %d", assigned_users.size(), timeout_users.size());
@@ -392,14 +465,14 @@ public:
 
         LOG("begin iter");
         auto program_start_time = std::chrono::steady_clock::now();
-        int round = 1;
+        int round = 2;
         std::vector<int> r = {1, 1, 1, 1, 1};
         while (round --) {
             LOG("round %d is running", round);
             std::vector<int> new_timeout_users;
             int idx = 0, sz = timeout_users.size();
             int success_count = 0;
-            int max_try_users_count = 300;
+            int max_try_users_count = 50;
             while (idx < sz) {
                 bool assign_success = false;
                 auto program_current_time = std::chrono::steady_clock::now();
@@ -422,6 +495,7 @@ public:
                         }
                     }
                 }
+
                 if (max_try_users_count == r[round] and !assign_success) {
                     new_timeout_users.push_back(timeout_users[idx]);
                     idx += r[round];
@@ -478,7 +552,7 @@ public:
         LOG("%s module is running!", name().c_str());
         // 一些数据相关的定义
         int M = data.m_users, N = data.n_servers, memory = npu.memory;;
-        int max_time = 1e6, server_id = npu.server_id, npu_id = npu.npu_id;
+        int max_time = 2e6, server_id = npu.server_id, npu_id = npu.npu_id;
     
         auto& users = data.users;
         auto& latency = data.latency;
@@ -598,6 +672,8 @@ public:
                     if (can_send(time, user_id, best_batch_size)) {
                         send_update(time, user_id, best_batch_size);
                         finish_time = time + best_block_time;
+                    } else {
+                        waiting_users.push({time, user_id}); 
                     }
                     
                 } else { // 对于剩余需要填块的用户

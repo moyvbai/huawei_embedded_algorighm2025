@@ -287,9 +287,10 @@ public:
         auto can_send2 = [&](int time, int user_id, int batch) {
             if (batch <= 0) return false;
             if (remaining_send_count[user_id] <= 0) return false;
-            // if (npu.calculate_time(batch) < small_time[user_id]) return false;
             int A = users[user_id].a, B = users[user_id].b;
-            double rate = 0.5;
+            double r1 = big_time[user_id] * big_time[user_id];
+            double r2 = small_time[user_id] * small_time[user_id];
+            double rate = r2 / (r1 + r2); // ´ó¿éµÄ±ÈÀý
             int cnt2 = remaining_send_count[user_id] * rate;
             int cnt1 = remaining_send_count[user_id] - cnt2;
             int big_batch = big_time[user_id] * big_time[user_id] * npu.k * npu.k;
@@ -298,9 +299,6 @@ public:
             int process_time = calculate_handle_time(user_id, remaining_samples[user_id], batch);
             return time + process_time <= users[user_id].e;
         };
-
-
-
 
 
 
@@ -499,14 +497,14 @@ public:
 
         LOG("begin iter");
         auto program_start_time = std::chrono::steady_clock::now();
-        int round = 1;
+        int round = 2;
         std::vector<int> r = {1, 1, 1, 1, 1};
         while (round --) {
             LOG("round %d is running", round);
             std::vector<int> new_timeout_users;
             int idx = 0, sz = timeout_users.size();
             int success_count = 0;
-            int max_try_users_count = std::min(50, (int)timeout_users.size());
+            int max_try_users_count = std::min(100, (int)timeout_users.size());
             while (idx < sz) {
                 bool assign_success = false;
                 auto program_current_time = std::chrono::steady_clock::now();

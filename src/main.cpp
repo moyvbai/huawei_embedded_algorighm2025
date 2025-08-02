@@ -2,7 +2,7 @@
 #pragma GCC optimize(3)
 
 #include <bits/stdc++.h>
-#define MAX_RUN_TIME (4)
+#define MAX_RUN_TIME (28)
 
 
 using arr2 = std::array<int, 2>;
@@ -303,9 +303,10 @@ public:
 
 
         /*根据当前的情况向后预测block_time的时间，返回处理的batchsize数量*/
-        auto simulate = [&](int time, int block_time) {
+        auto simulate = [&](int time, int block_time, int &best_id) {
             std::vector<pri> tmp_users;
             int free_memory = memory, used_batch = 0, s = 0;
+            int best_util = 0;
             while (!available_users.empty()) {
                 if (free_memory < 110) break;
                 int user_id = available_users.top().second;
@@ -321,16 +322,26 @@ public:
                 batch_size = std::min(batch_size, remaining_samples[user_id]);
                 
                 if (can_send2(time, user_id, batch_size)) {
-                    used_batch += batch_size;
-                    s += batch_size * users[user_id].a;
-                    
-                    free_memory -= users[user_id].calculate_memory(batch_size);
+                    int current_util = batch_size * users[user_id].a;
+                    int current_memory = users[user_id].calculate_memory(batch_size);
+                    if (free_memory - current_memory <= 150) {
+                        if (current_util > best_util) {
+                            best_util = current_util;
+                            best_id = user_id;
+                        }
+                    } 
+                    if (best_util == 0) {
+                        used_batch += batch_size;
+                        s += batch_size * users[user_id].a;
+                        free_memory -= users[user_id].calculate_memory(batch_size);
+                    } 
                     // LOG("batch: %d, a: %d, free: %d", batch_size, users[user_id].a, free_memory);
                     // LOG("util: %d", s);
                 } else {
                     continue;
                 }
             }
+            s += best_util;
 
             for(auto&v: tmp_users) {
                 available_users.push(v);
@@ -340,6 +351,7 @@ public:
 
         /*在某个时间节点的发送策略*/
         auto send_strategy = [&](int time) {
+            int best_id = -1, best_util = 0, simulate_id = -1;
             while (!available_users.empty()) {
                 if (early_stop) break;
                 int user_id = available_users.top().second; 
@@ -372,7 +384,7 @@ public:
                         // LOG("time: %d, user id: %d, batch size: %d", time, user_id, batch_size);
                         // LOG("can send: %d", can_send2(time, user_id, batch_size));
                         if (can_send(time, user_id, batch_size)) {
-                            double util = simulate(time, block_time);
+                            double util = simulate(time, block_time, simulate_id);
                             // LOG("util: %.2f, block time: %d", util, block_time);
                             util /= block_time;
                             if (util > best_util) {
@@ -495,8 +507,8 @@ public:
             double u1_pri = users[u1].cnt * users[u1].a + users[u1].b;
             double u2_pri = users[u2].cnt * users[u2].a + users[u2].b;
 
-            u1_pri /= std::pow(2.0, -users[u1].id / 5000.0);
-            u2_pri /= std::pow(2.0, -users[u2].id / 5000.0);
+            // u1_pri /= std::pow(2.0, -users[u1].id / 5000.0);
+            // u2_pri /= std::pow(2.0, -users[u2].id / 5000.0);
 
             return u1_pri < u2_pri;
         });
@@ -504,7 +516,7 @@ public:
 
         LOG("begin iter");
         auto program_start_time = std::chrono::steady_clock::now();
-        int round = 2;
+        int round = 1;
         std::vector<int> r = {1, 1, 1, 1, 1};
         while (round --) {
             LOG("round %d is running", round);
@@ -551,8 +563,8 @@ public:
                 double u1_pri = users[u1].cnt * users[u1].a + users[u1].b;
                 double u2_pri = users[u2].cnt * users[u2].a + users[u2].b;
 
-                u1_pri /= std::pow(2.0, -users[u1].id / 5000.0);
-                u2_pri /= std::pow(2.0, -users[u2].id / 5000.0);
+                // u1_pri /= std::pow(2.0, -users[u1].id / 5000.0);
+                // u2_pri /= std::pow(2.0, -users[u2].id / 5000.0);
 
                 return u1_pri < u2_pri;
             });
@@ -562,6 +574,10 @@ public:
             std::chrono::duration<double> elapsed_seconds = program_current_time - program_start_time;
             if (elapsed_seconds.count() >= MAX_RUN_TIME) break;
         }
+        // assert(round <= 0);
+        // bool f1 = (int)timeout_users.size() >= 300;
+        // bool f2 = (int)timeout_users.size() <= 100;
+        // assert(f1 or f2);
         return result;        
     }
 

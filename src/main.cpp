@@ -324,7 +324,7 @@ public:
                 if (can_send2(time, user_id, batch_size)) {
                     int current_util = batch_size * users[user_id].a;
                     int current_memory = users[user_id].calculate_memory(batch_size);
-                    if (free_memory - current_memory <= 150) {
+                    if (free_memory - current_memory < 110) {
                         if (current_util > best_util) {
                             best_util = current_util;
                             best_id = user_id;
@@ -391,6 +391,7 @@ public:
                                 best_util = util; 
                                 best_batch_size = batch_size;
                                 best_block_time = block_time;
+                                best_id = simulate_id;
                             }
                         }
                     }
@@ -413,7 +414,18 @@ public:
 
                     available_users.pop();
                     if (can_send2(time, user_id, batch_size)) {
-                        send(time, user_id, batch_size);
+                        int current_memory = users[user_id].calculate_memory(batch_size);
+                        if (free_memory - current_memory < 110) {
+                            if (user_id == best_id) {
+                                send(time, user_id, batch_size);
+                                break;
+                            } else {
+                                waiting_users.push({time, user_id}); 
+                            }
+                        } else {
+                            send(time, user_id, batch_size);
+                        }
+                        
                     } else {
                         waiting_users.push({time, user_id}); 
                     }

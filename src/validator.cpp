@@ -326,7 +326,8 @@ void Simulator::calculate_score() {
         else if (user.finish_time > user.e) h_arg = std::numeric_limits<double>::infinity();
         double h_val = std::pow(2.0, -h_arg / 100.0);
         double p_val = std::pow(2.0, -static_cast<double>(user.migrations) / 200.0);
-        total_score += h_val * p_val * 10000.0;
+        double q_val = std::pow(2.0, -static_cast<double>(user.id) / 5000.0);
+        total_score += h_val * p_val * q_val * 10000.0;
     }
     double k_penalty = std::pow(2.0, -static_cast<double>(late_users_count) / 100.0);
     double final_score = k_penalty * total_score;

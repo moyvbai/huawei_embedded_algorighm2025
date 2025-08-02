@@ -2,7 +2,7 @@
 #pragma GCC optimize(3)
 
 #include <bits/stdc++.h>
-#define MAX_RUN_TIME (270)
+#define MAX_RUN_TIME (4)
 
 
 using arr2 = std::array<int, 2>;
@@ -303,11 +303,14 @@ public:
 
 
         /*根据当前的情况向后预测block_time的时间，返回处理的batchsize数量*/
-        auto simulate = [&](int time, int block_time, std::vector<pri> &userids) {
+        auto simulate = [&](int time, int block_time) {
+            std::vector<pri> tmp_users;
             int free_memory = memory, used_batch = 0, s = 0;
-            for (auto& v: userids) {
+            while (!available_users.empty()) {
                 if (free_memory < 110) break;
                 int user_id = available_users.top().second;
+                tmp_users.push_back(available_users.top());
+                available_users.pop();
                 
                 int batch_size = (block_time * npu.k) * (block_time * npu.k);
                 int free_batch_size = users[user_id].calculate_batch(free_memory);
@@ -329,6 +332,9 @@ public:
                 }
             }
 
+            for(auto&v: tmp_users) {
+                available_users.push(v);
+            }
             return s;
         };
 
@@ -358,13 +364,6 @@ public:
                     int min_block_time = 1;
                     int best_block_time = 1, best_batch_size = 0;
                     double best_util = 0.0;
-
-                    std::vector<pri> userids;
-                    for (int i = 1; i <= 20; i ++) {
-                        if (available_users.empty()) break;
-                        userids.push_back(available_users.top());
-                        available_users.pop();
-                    }
                     
                     for (int block_time = min_block_time; block_time <= max_block_time; block_time ++) {
                         int batch_size = (block_time * npu.k) * (block_time * npu.k);
@@ -373,7 +372,7 @@ public:
                         // LOG("time: %d, user id: %d, batch size: %d", time, user_id, batch_size);
                         // LOG("can send: %d", can_send2(time, user_id, batch_size));
                         if (can_send(time, user_id, batch_size)) {
-                            double util = simulate(time, block_time, userids);
+                            double util = simulate(time, block_time);
                             // LOG("util: %.2f, block time: %d", util, block_time);
                             util /= block_time;
                             if (util > best_util) {
@@ -383,11 +382,6 @@ public:
                             }
                         }
                     }
-
-                    for (auto& v: userids) {
-                        available_users.push(v);
-                    }
-
 
                     available_users.pop();
                     if (can_send(time, user_id, best_batch_size)) {
@@ -496,8 +490,15 @@ public:
             timeout_users.push_back(i);
         }
 
+
         std::sort(timeout_users.begin(), timeout_users.end(), [&](int u1, int u2) {
-            return users[u1].cnt * users[u1].a + users[u1].b < users[u2].cnt * users[u2].a + users[u2].b;
+            double u1_pri = users[u1].cnt * users[u1].a + users[u1].b;
+            double u2_pri = users[u2].cnt * users[u2].a + users[u2].b;
+
+            u1_pri /= std::pow(2.0, -users[u1].id / 5000.0);
+            u2_pri /= std::pow(2.0, -users[u2].id / 5000.0);
+
+            return u1_pri < u2_pri;
         });
 
 
@@ -547,7 +548,13 @@ public:
             
             timeout_users = new_timeout_users;
             std::sort(timeout_users.begin(), timeout_users.end(), [&](int u1, int u2) {
-                return users[u1].cnt * users[u1].a + users[u1].b < users[u2].cnt * users[u2].a + users[u2].b;
+                double u1_pri = users[u1].cnt * users[u1].a + users[u1].b;
+                double u2_pri = users[u2].cnt * users[u2].a + users[u2].b;
+
+                u1_pri /= std::pow(2.0, -users[u1].id / 5000.0);
+                u2_pri /= std::pow(2.0, -users[u2].id / 5000.0);
+
+                return u1_pri < u2_pri;
             });
             LOG("this round new success count: %d", success_count);
             if (success_count == 0) break;

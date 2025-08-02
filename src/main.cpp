@@ -303,10 +303,9 @@ public:
 
 
         /*根据当前的情况向后预测block_time的时间，返回处理的batchsize数量*/
-        auto simulate = [&](int time, int block_time, int &best_id) {
+        auto simulate = [&](int time, int block_time) {
             std::vector<pri> tmp_users;
             int free_memory = memory, used_batch = 0, s = 0;
-            int best_util = 0;
             while (!available_users.empty()) {
                 if (free_memory < 110) break;
                 int user_id = available_users.top().second;
@@ -322,26 +321,16 @@ public:
                 batch_size = std::min(batch_size, remaining_samples[user_id]);
                 
                 if (can_send2(time, user_id, batch_size)) {
-                    int current_util = batch_size * users[user_id].a;
-                    int current_memory = users[user_id].calculate_memory(batch_size);
-                    if (free_memory - current_memory < 110) {
-                        if (current_util > best_util) {
-                            best_util = current_util;
-                            best_id = user_id;
-                        }
-                    } 
-                    if (best_util == 0) {
-                        used_batch += batch_size;
-                        s += batch_size * users[user_id].a;
-                        free_memory -= users[user_id].calculate_memory(batch_size);
-                    } 
+                    used_batch += batch_size;
+                    s += batch_size * users[user_id].a;
+                    
+                    free_memory -= users[user_id].calculate_memory(batch_size);
                     // LOG("batch: %d, a: %d, free: %d", batch_size, users[user_id].a, free_memory);
                     // LOG("util: %d", s);
                 } else {
                     continue;
                 }
             }
-            s += best_util;
 
             for(auto&v: tmp_users) {
                 available_users.push(v);
@@ -351,7 +340,6 @@ public:
 
         /*在某个时间节点的发送策略*/
         auto send_strategy = [&](int time) {
-            int best_id = -1, best_util = 0, simulate_id = -1;
             while (!available_users.empty()) {
                 if (early_stop) break;
                 int user_id = available_users.top().second; 
@@ -384,14 +372,13 @@ public:
                         // LOG("time: %d, user id: %d, batch size: %d", time, user_id, batch_size);
                         // LOG("can send: %d", can_send2(time, user_id, batch_size));
                         if (can_send(time, user_id, batch_size)) {
-                            double util = simulate(time, block_time, simulate_id);
+                            double util = simulate(time, block_time);
                             // LOG("util: %.2f, block time: %d", util, block_time);
                             util /= block_time;
                             if (util > best_util) {
                                 best_util = util; 
                                 best_batch_size = batch_size;
                                 best_block_time = block_time;
-                                best_id = simulate_id;
                             }
                         }
                     }
@@ -414,18 +401,7 @@ public:
 
                     available_users.pop();
                     if (can_send2(time, user_id, batch_size)) {
-                        int current_memory = users[user_id].calculate_memory(batch_size);
-                        if (free_memory - current_memory < 110) {
-                            if (user_id == best_id) {
-                                send(time, user_id, batch_size);
-                                break;
-                            } else {
-                                waiting_users.push({time, user_id}); 
-                            }
-                        } else {
-                            send(time, user_id, batch_size);
-                        }
-                        
+                        send(time, user_id, batch_size);
                     } else {
                         waiting_users.push({time, user_id}); 
                     }

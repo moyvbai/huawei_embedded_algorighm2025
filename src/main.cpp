@@ -787,23 +787,23 @@ public:
                         batch_size = std::min(batch_size, remaining_samples[user_id]);
                         // LOG("time: %d, user id: %d, batch size: %d", time, user_id, batch_size);
                         // LOG("can send: %d", can_send2(time, user_id, batch_size));
-                        if (can_send(time, user_id, batch_size)) {
-                            best_batch_size = batch_size;
-                            best_block_time = block_time;
-                            break;
-                            // double util = simulate(time, block_time);
+                        if (can_send2(time, user_id, batch_size)) {
+                            // best_batch_size = batch_size;
+                            // best_block_time = block_time;
+                            // break;
+                            double util = 1.0 * batch_size / (users[user_id].calculate_memory(batch_size));
                             // LOG("util: %.2f, block time: %d", util, block_time);
-                            // util /= block_time;
-                            // if (util > best_util) {
-                            //     best_util = util; 
-                            //     best_batch_size = batch_size;
-                            //     best_block_time = block_time;
-                            // }
+                            util /= block_time;
+                            if (util > best_util) {
+                                best_util = util; 
+                                best_batch_size = batch_size;
+                                best_block_time = block_time;
+                            }
                         }
                     }
 
                     available_users.pop();
-                    if (can_send(time, user_id, best_batch_size)) {
+                    if (can_send2(time, user_id, best_batch_size)) {
                         // LOG("time: %d. user id: %d, batch: %d", time, user_id, best_batch_size);
                         send(time, user_id, best_batch_size);
                         finish_time = time + best_block_time;

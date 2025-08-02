@@ -2,7 +2,7 @@
 #pragma GCC optimize(3)
 
 #include <bits/stdc++.h>
-#define MAX_RUN_TIME (28)
+#define MAX_RUN_TIME (27)
 
 
 using arr2 = std::array<int, 2>;
@@ -504,7 +504,7 @@ public:
 
         LOG("begin iter");
         auto program_start_time = std::chrono::steady_clock::now();
-        int round = 1;
+        int round = 2;
         std::vector<int> r = {1, 1, 1, 1, 1};
         while (round --) {
             LOG("round %d is running", round);

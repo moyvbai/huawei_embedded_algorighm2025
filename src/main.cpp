@@ -2,7 +2,7 @@
 #pragma GCC optimize(3)
 
 #include <bits/stdc++.h>
-#define MAX_RUN_TIME (27)
+#define MAX_RUN_TIME (28)
 
 
 using arr2 = std::array<int, 2>;
@@ -12,7 +12,7 @@ using arr4 = std::array<int, 4>;
 // ===================================================================
 // START: Logger System
 // ===================================================================
-#define DEBUG
+// #define DEBUG
 #ifdef DEBUG
     #define LOG(...) do { \
         fprintf(stderr, "[DEBUG] "); \

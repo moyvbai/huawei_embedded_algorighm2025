@@ -303,14 +303,11 @@ public:
 
 
         /*根据当前的情况向后预测block_time的时间，返回处理的batchsize数量*/
-        auto simulate = [&](int time, int block_time) {
-            std::vector<pri> tmp_users;
+        auto simulate = [&](int time, int block_time, std::vector<pri> &userids) {
             int free_memory = memory, used_batch = 0, s = 0;
-            while (!available_users.empty()) {
+            for (auto& v: userids) {
                 if (free_memory < 110) break;
                 int user_id = available_users.top().second;
-                tmp_users.push_back(available_users.top());
-                available_users.pop();
                 
                 int batch_size = (block_time * npu.k) * (block_time * npu.k);
                 int free_batch_size = users[user_id].calculate_batch(free_memory);
@@ -332,9 +329,6 @@ public:
                 }
             }
 
-            for(auto&v: tmp_users) {
-                available_users.push(v);
-            }
             return s;
         };
 
@@ -364,6 +358,13 @@ public:
                     int min_block_time = 1;
                     int best_block_time = 1, best_batch_size = 0;
                     double best_util = 0.0;
+
+                    std::vector<pri> userids;
+                    for (int i = 1; i <= 20; i ++) {
+                        if (available_users.empty()) break;
+                        userids.push_back(available_users.top());
+                        available_users.pop();
+                    }
                     
                     for (int block_time = min_block_time; block_time <= max_block_time; block_time ++) {
                         int batch_size = (block_time * npu.k) * (block_time * npu.k);
@@ -372,7 +373,7 @@ public:
                         // LOG("time: %d, user id: %d, batch size: %d", time, user_id, batch_size);
                         // LOG("can send: %d", can_send2(time, user_id, batch_size));
                         if (can_send(time, user_id, batch_size)) {
-                            double util = simulate(time, block_time);
+                            double util = simulate(time, block_time, userids);
                             // LOG("util: %.2f, block time: %d", util, block_time);
                             util /= block_time;
                             if (util > best_util) {
@@ -382,6 +383,11 @@ public:
                             }
                         }
                     }
+
+                    for (auto& v: userids) {
+                        available_users.push(v);
+                    }
+
 
                     available_users.pop();
                     if (can_send(time, user_id, best_batch_size)) {
